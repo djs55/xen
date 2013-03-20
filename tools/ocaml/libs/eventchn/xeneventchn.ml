@@ -14,8 +14,6 @@
  * GNU Lesser General Public License for more details.
  *)
 
-exception Error of string
-
 type handle
 
 external init: unit -> handle = "stub_eventchn_init"
@@ -29,5 +27,3 @@ external bind_dom_exc_virq: handle -> int = "stub_eventchn_bind_dom_exc_virq"
 external unbind: handle -> int -> unit = "stub_eventchn_unbind"
 external pending: handle -> int = "stub_eventchn_pending"
 external unmask: handle -> int -> unit = "stub_eventchn_unmask"
-
-let _ = Callback.register_exception "eventchn.error" (Error "register_callback")
