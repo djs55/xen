@@ -14,16 +14,38 @@
  * GNU Lesser General Public License for more details.
  *)
 
+(** Event channel bindings: see tools/libxc/xenctrl.h *)
+
 exception Error of string
 
 type handle
+(** An initialised event channel interface. *)
 
 type t = int
+(** A local event channel. *)
 
 val notify : handle -> t -> unit
+(** Notify the given event channel. On error it will throw a
+    Failure exception. *)
+
 val bind_interdomain : handle -> int -> int -> t
+(** [bind_interdomain h domid remote_port] returns a local event
+    channel connected to domid:remote_port. On error it will
+    throw a Failure exception. *)
 
 val bind_dom_exc_virq : handle -> t
+(** Binds a local event channel to the VIRQ_DOM_EXC
+    (domain exception VIRQ). On error it will throw a Failure
+    exception. *)
+
 val unbind : handle -> t -> unit
+(** Unbinds the given event channel. On error it will throw a
+    Failure exception. *)
+
 val pending : handle -> t
+(** Returns the next event channel to become pending. On error it
+    will throw a Failure exception. *)
+
 val unmask : handle -> t -> unit
+(** Unmasks the given event channel. On error it will throw a
+    Failure exception. *)
