@@ -21,6 +21,15 @@ exception Error of string
 type handle
 (** An initialised event channel interface. *)
 
+val init : unit -> handle
+(** Return an initialised event channel interface. On error it
+    will throw a Failure exception. *)
+
+val fd: handle -> Unix.file_descr
+(** Return a file descriptor suitable for Unix.select. When
+    the descriptor becomes readable, it is safe to call 'pending'.
+    On error it will throw a Failure exception. *)
+
 type t
 (** A local event channel. *)
 
