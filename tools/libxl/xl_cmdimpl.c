@@ -1304,7 +1304,6 @@ static void parse_config_data(const char *config_source,
             p = strtok(buf2, ",");
             if (!p)
                 goto skip_channel;
-            //p = buf2;
             do {
                 while (*p == ' ')
                     p++;
