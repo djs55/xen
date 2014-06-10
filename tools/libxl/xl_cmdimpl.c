@@ -736,7 +736,7 @@ static void parse_config_data(const char *config_source,
     long l;
     XLU_Config *config;
     XLU_ConfigList *cpus, *vbds, *nics, *pcis, *cvfbs, *cpuids, *vtpms;
-    XLU_ConfigList *ioports, *irqs, *iomem;
+    XLU_ConfigList *channels, *ioports, *irqs, *iomem;
     int num_ioports, num_irqs, num_iomem;
     int pci_power_mgmt = 0;
     int pci_msitranslate = 0;
@@ -1286,6 +1286,62 @@ static void parse_config_data(const char *config_source,
             }
             free(buf2);
             d_config->num_vtpms++;
+        }
+    }
+
+    if (!xlu_cfg_get_list (config, "channel", &channels, 0, 0)) {
+        d_config->num_channels = 0;
+        d_config->channels = NULL;
+        while ((buf = xlu_cfg_get_listitem (channels,
+                d_config->num_channels)) != NULL) {
+            libxl_device_channel *chn;
+            char *buf2 = strdup(buf);
+            char *p, *p2;
+            chn = ARRAY_EXTEND_INIT(d_config->channels, d_config->num_channels,
+                                    libxl_device_channel_init);
+
+            p = strtok(buf2, ",");
+            if (!p)
+                goto skip_channel;
+            do {
+                while (*p == ' ')
+                    p++;
+                if ((p2 = strchr(p, '=')) == NULL)
+                    break;
+                *p2 = '\0';
+                if (!strcmp(p, "backend")) {
+                    free(chn->backend_domname);
+                    chn->backend_domname = strdup(p2 + 1);
+                } else if (!strcmp(p, "name")) {
+                    free(chn->name);
+                    chn->name = strdup(p2 + 1);
+                } else if (!strcmp(p, "type")) {
+                    if (chn->type != LIBXL_CHANNEL_TYPE_NONE) {
+                        fprintf(stderr, "a channel may have only one output\n");
+                        exit(1);
+                    }
+                    if (!strcmp(p2 + 1, "none")) {
+                        chn->type = LIBXL_CHANNEL_TYPE_NONE;
+                    } else if (!strcmp(p2 + 1, "pty")) {
+                        chn->type = LIBXL_CHANNEL_TYPE_PTY;
+                    } else if (!strcmp(p2 + 1, "path")) {
+                        chn->type = LIBXL_CHANNEL_TYPE_PATH;
+                    } else if (!strcmp(p2 + 1, "socket")) {
+                        chn->type = LIBXL_CHANNEL_TYPE_SOCKET;
+                    } else {
+                        fprintf(stderr, "unknown channel type '%s'\n", p2 + 1);
+                        exit(1);
+                    }
+                } else if (!strcmp(p, "path")) {
+                    free(chn->path);
+                    chn->path = strdup(p2 + 1);
+                } else {
+                    fprintf(stderr, "unknown channel parameter '%s',"
+                                    " ignoring\n", p);
+                }
+            } while ((p = strtok(NULL, ",")) != NULL);
+skip_channel:
+            free(buf2);
         }
     }
 
