@@ -1450,7 +1450,8 @@ _hidden const char *libxl__domain_device_model(libxl__gc *gc,
 _hidden int libxl__need_xenpv_qemu(libxl__gc *gc,
         int nr_consoles, libxl__device_console *consoles,
         int nr_vfbs, libxl_device_vfb *vfbs,
-        int nr_disks, libxl_device_disk *disks);
+        int nr_disks, libxl_device_disk *disks,
+        int nr_channels);
 
 /*
  * This function will cause the whole libxl process to hang
