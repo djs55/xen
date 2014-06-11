@@ -470,6 +470,69 @@ L<qemu(1)> manpage. The default is B<en-us>.
 
 =back
 
+=item B<channel=[ "CHANNEL_SPEC_STRING", "CHANNEL_SPEC_STRING", ...]>
+
+Specifies the virtual channels to be provided to the guest. A
+channel is a bidirectional byte stream, a private connection between
+the backend and the frontend, which resembles a serial port. Typical
+uses for channels include transmitting VM configuration after boot
+and signalling to in-guest agents. Please see F<docs/misc/channels.txt>
+for more details.
+
+Each B<CHANNEL_SPEC_STRING> is a comma-separated list of C<KEY=VALUE>
+settings, from the following list:
+
+=over 4
+
+=item C<backend=DOMAIN>
+
+Specify the backend domain name or id. This parameter is optional. If
+this parameter is omitted then the toolstack domain will be assumed.
+
+=item C<name=NAME>
+
+Specify the string name for this device. This should be a well-known
+name for the specific application (e.g. guest agent) and should be used
+by the frontend to connect the application to the right channel device.
+This parameter is mandatory.
+
+=item C<type=TYPE>
+
+Specify how the backend should manifest. This should be one of the
+following possibilities:
+
+=over 4
+
+=item B<type=NONE>:
+
+The backend should be connected to the equivalent of
+B</dev/null>.
+
+=item B<type=FILE>:
+
+The backend should be connected to a file such that the
+console output is read and spooled to the file (e.g. for logging).
+
+=item B<type=SOCKET>:
+
+The backend should be connected to the equivalent of
+a Unix domain socket.
+
+=item B<type=PTY>:
+
+The backend should be connected to the equivalent of a
+pty.
+
+=back
+
+=item C<path=PATH>
+
+If C<type=FILE> then this path is the file to which the console output
+should be logged. If C<type=SOCKET> then this is the path of the Unix domain
+socket which should be connected to the channel.
+
+=back
+
 =item B<pci=[ "PCI_SPEC_STRING", "PCI_SPEC_STRING", ... ]>
 
 Specifies the host PCI devices to passthrough to this guest. Each B<PCI_SPEC_STRING>
