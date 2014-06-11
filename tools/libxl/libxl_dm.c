@@ -394,8 +394,9 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
     const libxl_sdl_info *sdl = dm_sdl(guest_config);
     const char *keymap = dm_keymap(guest_config);
     flexarray_t *dm_args;
-    int i;
+    int i, type;
     uint64_t ram_size;
+    const char *path;
 
     dm_args = flexarray_make(gc, 16, 1);
 
@@ -411,6 +412,39 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
 
     flexarray_append(dm_args, "-mon");
     flexarray_append(dm_args, "chardev=libxl-cmd,mode=control");
+
+    for (i = 0; i < guest_config->num_channels; i++) {
+        flexarray_append(dm_args, "-chardev");
+        type = guest_config->channels[i].type;
+        switch (type) {
+            case LIBXL_CHANNEL_TYPE_NONE:
+                flexarray_append(dm_args,
+                                 libxl__sprintf(gc, "null,id=libxl-channel%d",
+                                                    i));
+                break;
+            case LIBXL_CHANNEL_TYPE_PTY:
+                flexarray_append(dm_args,
+                                 libxl__sprintf(gc, "pty,id=libxl-channel%d",
+                                                    i));
+                break;
+            case LIBXL_CHANNEL_TYPE_PATH:
+                flexarray_append(dm_args,
+                                 libxl__sprintf(gc, "file,id=libxl-channel%d,"
+                                                    "path=%s", i, path));
+                break;
+            case LIBXL_CHANNEL_TYPE_SOCKET:
+                path = guest_config->channels[i].path;
+                flexarray_append(dm_args,
+                                 libxl__sprintf(gc, "socket,id=libxl-channel%d,"
+                                                    "path=%s,server,nowait",
+                                                    i, path));
+                break;
+            default:
+                /* We've forgotten to add the clause */
+                LOG(ERROR, "%s: unknown channel type %d", __func__, type);
+                return NULL;
+        }
+    }
 
     /*
      * Remove default devices created by qemu. Qemu will create only devices
@@ -1517,7 +1551,8 @@ int libxl__destroy_device_model(libxl__gc *gc, uint32_t domid)
 int libxl__need_xenpv_qemu(libxl__gc *gc,
         int nr_consoles, libxl__device_console *consoles,
         int nr_vfbs, libxl_device_vfb *vfbs,
-        int nr_disks, libxl_device_disk *disks)
+        int nr_disks, libxl_device_disk *disks,
+        int nr_channels)
 {
     int i, ret = 0;
     uint32_t domid;
@@ -1555,6 +1590,11 @@ int libxl__need_xenpv_qemu(libxl__gc *gc,
                 goto out;
             }
         }
+    }
+
+    if (nr_channels > 0) {
+        ret = 1;
+        goto out;
     }
 
 out:

@@ -1191,7 +1191,8 @@ static void domcreate_launch_dm(libxl__egc *egc, libxl__multidev *multidev,
 
         need_qemu = libxl__need_xenpv_qemu(gc, 1, &console,
                 d_config->num_vfbs, d_config->vfbs,
-                d_config->num_disks, &d_config->disks[0]);
+                d_config->num_disks, &d_config->disks[0],
+                d_config->num_channels);
 
         console.backend_domid = state->console_domid;
         libxl__device_console_add(gc, domid, &console, state);
