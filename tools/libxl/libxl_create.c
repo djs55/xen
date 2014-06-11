@@ -361,10 +361,59 @@ static int init_console_info(libxl__device_console *console, int dev_num)
     console->devid = dev_num;
     console->consback = LIBXL__CONSOLE_BACKEND_XENCONSOLED;
     console->output = strdup("pty");
+    /* console->name is NULL on normal consoles. Only 'channels' when mapped
+       to consoles have a string name. */
     if (!console->output)
         return ERROR_NOMEM;
     return 0;
 }
+
+static int init_console_from_channel(libxl__gc *gc,
+                                     libxl__device_console *console,
+                                     int dev_num,
+                                     libxl_device_channel *channel)
+{
+    const char *chardev;
+    memset(console, 0x00, sizeof(libxl__device_console));
+    console->devid = dev_num;
+    console->consback = LIBXL__CONSOLE_BACKEND_IOEMU;
+    if (!channel->name){
+        LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
+                   "channel %d has no name", channel->devid);
+        return ERROR_INVAL;
+    }
+    console->name = strdup(channel->name);
+    console->backend_domid = channel->backend_domid;
+
+    switch (channel->type) {
+        case LIBXL_CHANNEL_TYPE_NONE:
+        case LIBXL_CHANNEL_TYPE_PTY:
+            /* No path is needed */
+            break;
+        case LIBXL_CHANNEL_TYPE_PATH:
+        case LIBXL_CHANNEL_TYPE_SOCKET:
+            if (!channel->path) {
+                LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
+                           "channel %d has no path", channel->devid);
+                return ERROR_INVAL;
+            }
+            break;
+        default:
+            /* We've forgotten to add the clause */
+            LOG(ERROR, "%s: unknown channel type %d", __func__, channel->type);
+            return ERROR_INVAL;
+    }
+
+    /* Use qemu chardev for every channel */
+    chardev = libxl__sprintf(gc, "chardev:libxl-channel%d",
+                                 channel->devid);
+    if (!chardev) return ERROR_NOMEM;
+    console->output = strdup(chardev);
+    if (!console->output) return ERROR_NOMEM;
+
+    return 0;
+}
+
 
 int libxl__domain_build(libxl__gc *gc,
                         libxl_domain_config *d_config,
@@ -1108,6 +1157,17 @@ static void domcreate_launch_dm(libxl__egc *egc, libxl__multidev *multidev,
                  domid, io->start, io->start + io->number - 1);
             ret = ERROR_FAIL;
         }
+    }
+
+    /* For both HVM and PV the 0th console is a regular console. We
+       map channels to IOEMU consoles starting at 1 */
+    for (i = 0; i < d_config->num_channels; i++) {
+        libxl__device_console console;
+        ret = init_console_from_channel(gc, &console, i + 1, &d_config->channels[i]);
+        if ( ret )
+            goto error_out;
+        libxl__device_console_add(gc, domid, &console, NULL);
+        libxl__device_console_dispose(&console);
     }
 
     switch (d_config->c_info.type) {
