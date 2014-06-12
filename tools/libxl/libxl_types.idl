@@ -60,7 +60,7 @@ libxl_channel_type = Enumeration("channel_type", [
     (2, "PATH"),
     # Listen on a Unix domain socket in the backend domain:
     (3, "SOCKET"),
-    ], init_val = 0)
+    ])
 
 libxl_device_model_version = Enumeration("device_model_version", [
     (0, "UNKNOWN"),
