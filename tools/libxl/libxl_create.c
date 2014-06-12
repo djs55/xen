@@ -355,16 +355,16 @@ int libxl__domain_build_info_setdefault(libxl__gc *gc,
     return 0;
 }
 
-static int init_console_info(libxl__device_console *console, int dev_num)
+static int init_console_info(libxl__gc *gc,
+                             libxl__device_console *console,
+                             int dev_num)
 {
-    memset(console, 0x00, sizeof(libxl__device_console));
+    libxl__device_console_init(console);
     console->devid = dev_num;
     console->consback = LIBXL__CONSOLE_BACKEND_XENCONSOLED;
-    console->output = strdup("pty");
+    console->output = libxl__strdup(NOGC, "pty");
     /* console->name is NULL on normal consoles. Only 'channels' when mapped
        to consoles have a string name. */
-    if (!console->output)
-        return ERROR_NOMEM;
     return 0;
 }
 
@@ -373,8 +373,7 @@ static int init_console_from_channel(libxl__gc *gc,
                                      int dev_num,
                                      libxl_device_channel *channel)
 {
-    const char *chardev;
-    memset(console, 0x00, sizeof(libxl__device_console));
+    libxl__device_console_init(console);
     console->devid = dev_num;
     console->consback = LIBXL__CONSOLE_BACKEND_IOEMU;
     if (!channel->name){
@@ -382,7 +381,7 @@ static int init_console_from_channel(libxl__gc *gc,
                    "channel %d has no name", channel->devid);
         return ERROR_INVAL;
     }
-    console->name = strdup(channel->name);
+    console->name = libxl__strdup(NOGC, channel->name);
     console->backend_domid = channel->backend_domid;
 
     switch (channel->type) {
@@ -405,11 +404,8 @@ static int init_console_from_channel(libxl__gc *gc,
     }
 
     /* Use qemu chardev for every channel */
-    chardev = libxl__sprintf(gc, "chardev:libxl-channel%d",
-                                 channel->devid);
-    if (!chardev) return ERROR_NOMEM;
-    console->output = strdup(chardev);
-    if (!console->output) return ERROR_NOMEM;
+    console->output = libxl__sprintf(NOGC, "chardev:libxl-channel%d",
+                                     channel->devid);
 
     return 0;
 }
@@ -1176,7 +1172,7 @@ static void domcreate_launch_dm(libxl__egc *egc, libxl__multidev *multidev,
         libxl__device_console console;
         libxl_device_vkb vkb;
 
-        ret = init_console_info(&console, 0);
+        ret = init_console_info(gc, &console, 0);
         if ( ret )
             goto error_out;
         console.backend_domid = state->console_domid;
@@ -1204,7 +1200,7 @@ static void domcreate_launch_dm(libxl__egc *egc, libxl__multidev *multidev,
             libxl__device_vkb_add(gc, domid, &d_config->vkbs[i]);
         }
 
-        ret = init_console_info(&console, 0);
+        ret = init_console_info(gc, &console, 0);
         if ( ret )
             goto error_out;
 
@@ -1443,7 +1439,7 @@ static void domain_create_cb(libxl__egc *egc,
 
     libxl__ao_complete(egc, ao, rc);
 }
-    
+
 int libxl_domain_create_new(libxl_ctx *ctx, libxl_domain_config *d_config,
                             uint32_t *domid,
                             const libxl_asyncop_how *ao_how,
