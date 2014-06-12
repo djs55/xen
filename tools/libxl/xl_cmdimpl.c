@@ -1292,14 +1292,13 @@ static void parse_config_data(const char *config_source,
     if (!xlu_cfg_get_list (config, "channel", &channels, 0, 0)) {
         d_config->num_channels = 0;
         d_config->channels = NULL;
-        while ((buf = xlu_cfg_get_listitem (channels, d_config->num_channels)) != NULL) {
-            libxl_device_channel *channel;
+        while ((buf = xlu_cfg_get_listitem (channels,
+                d_config->num_channels)) != NULL) {
+            libxl_device_channel *chn;
             char *buf2 = strdup(buf);
             char *p, *p2;
-            d_config->channels = (libxl_device_channel *) realloc(d_config->channels, sizeof (libxl_device_channel) * (d_config->num_channels + 1));
-            channel = d_config->channels + d_config->num_channels;
-            libxl_device_channel_init(channel);
-            channel->devid = d_config->num_channels;
+            chn = ARRAY_EXTEND_INIT(d_config->channels, d_config->num_channels,
+                                    libxl_device_channel_init);
 
             p = strtok(buf2, ",");
             if (!p)
@@ -1311,33 +1310,31 @@ static void parse_config_data(const char *config_source,
                     break;
                 *p2 = '\0';
                 if (!strcmp(p, "backend")) {
-                    free(channel->backend_domname);
-                    channel->backend_domname = strdup(p2 + 1);
+                    free(chn->backend_domname);
+                    chn->backend_domname = strdup(p2 + 1);
                 } else if (!strcmp(p, "name")) {
-                    free(channel->name);
-                    channel->name = strdup(p2 + 1);
+                    free(chn->name);
+                    chn->name = strdup(p2 + 1);
                 } else if (!strcmp(p, "type")) {
-                    if (channel->type != LIBXL_CHANNEL_TYPE_NONE) {
-                        fprintf(stderr, "a channel may have only one output,"
-                                        " skipping device\n");
-                        goto skip_channel;
+                    if (chn->type != LIBXL_CHANNEL_TYPE_NONE) {
+                        fprintf(stderr, "a channel may have only one output\n");
+                        exit(1);
                     }
                     if (!strcmp(p2 + 1, "none")) {
-                        channel->type = LIBXL_CHANNEL_TYPE_NONE;
+                        chn->type = LIBXL_CHANNEL_TYPE_NONE;
                     } else if (!strcmp(p2 + 1, "pty")) {
-                        channel->type = LIBXL_CHANNEL_TYPE_PTY;
+                        chn->type = LIBXL_CHANNEL_TYPE_PTY;
                     } else if (!strcmp(p2 + 1, "path")) {
-                        channel->type = LIBXL_CHANNEL_TYPE_PATH;
+                        chn->type = LIBXL_CHANNEL_TYPE_PATH;
                     } else if (!strcmp(p2 + 1, "socket")) {
-                        channel->type = LIBXL_CHANNEL_TYPE_SOCKET;
+                        chn->type = LIBXL_CHANNEL_TYPE_SOCKET;
                     } else {
-                        fprintf(stderr, "unknown channel type '%s',"
-                                        " skipping device\n", p2 + 1);
-                        goto skip_channel;
+                        fprintf(stderr, "unknown channel type '%s'\n", p2 + 1);
+                        exit(1);
                     }
                 } else if (!strcmp(p, "path")) {
-                    free(channel->path);
-                    channel->path = strdup(p2 + 1);
+                    free(chn->path);
+                    chn->path = strdup(p2 + 1);
                 } else {
                     fprintf(stderr, "unknown channel parameter '%s',"
                                     " ignoring\n", p);
@@ -1345,7 +1342,6 @@ static void parse_config_data(const char *config_source,
             } while ((p = strtok(NULL, ",")) != NULL);
 skip_channel:
             free(buf2);
-            d_config->num_channels++;
         }
     }
 
