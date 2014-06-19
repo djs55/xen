@@ -31,19 +31,25 @@ and still spawn regular getty processes when a normal console is created.
 
 The backend is configured by 2 xenstore keys:
 
-  type = (NONE | FILE | PTY | SOCKET | ... )
+  kind = (none | path | pty | socket )
   path = <some path>
 
-In the default implementation where the backend is run in the toolstack
-domain, the qemu "chardev" mechanism is used. This implementation
-interprets the configuration as follows:
+The configuration should be interpreted as follows:
 
-  type = NONE: the backend will be connected to /dev/null
-  type = FILE: the channel will be read the the output appended
-    to the file given by 'path'
-  type = PTY: the backend will connect to a PTY like a regular console
-  type = SOCKET: the backend will accept a connection on the Unix
+  kind = none: the backend will be connected to /dev/null
+  kind = path: the channel will be read the output appended to the
+    file given by 'path'
+  kind = pty: the backend will connect to a PTY like a regular console
+  kind = socket: the backend will accept a connection on the Unix
     domain socket given by 'path' and proxy data to and from the device.
 
-If the implementation is in another domain (for example via a Mirage
-console backend) then the behaviour will be defined by this other domain.
+In the default implementation where the backend is run in the toolstack
+domain, the qemu "chardev" mechanism is used. Internally this writes
+the 2 xenstore keys for the backend to the frontend:
+
+  type = ioemu
+  output = chardev:libxl-channel$DEVID
+
+The qemu commandline contains one "-chardev id=libxl-channel$DEVID,..."
+option per channel.
+
