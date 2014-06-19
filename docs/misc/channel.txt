@@ -31,14 +31,11 @@ and still spawn regular getty processes when a normal console is created.
 
 The backend is configured by 2 xenstore keys:
 
-  kind = (none | path | pty | socket )
+  kind = ( pty | socket )
   path = <some path>
 
 The configuration should be interpreted as follows:
 
-  kind = none: the backend will be connected to /dev/null
-  kind = path: the channel will be read the output appended to the
-    file given by 'path'
   kind = pty: the backend will connect to a PTY like a regular console
   kind = socket: the backend will accept a connection on the Unix
     domain socket given by 'path' and proxy data to and from the device.

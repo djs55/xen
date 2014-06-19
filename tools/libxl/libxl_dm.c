@@ -418,15 +418,8 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
         path = guest_config->channels[i].path;
         devid = guest_config->channels[i].devid;
         switch (kind) {
-            case LIBXL_CHANNEL_KIND_NONE:
-                chardev = GCSPRINTF("null,id=libxl-channel%d", devid);
-                break;
             case LIBXL_CHANNEL_KIND_PTY:
                 chardev = GCSPRINTF("pty,id=libxl-channel%d", devid);
-                break;
-            case LIBXL_CHANNEL_KIND_PATH:
-                chardev = GCSPRINTF("file,id=libxl-channel%d,path=%s",
-                                    devid, path);
                 break;
             case LIBXL_CHANNEL_KIND_SOCKET:
                 chardev = GCSPRINTF("socket,id=libxl-channel%d,path=%s,"

@@ -1316,16 +1316,12 @@ static void parse_config_data(const char *config_source,
                     free(chn->name);
                     chn->name = strdup(p2 + 1);
                 } else if (!strcmp(p, "kind")) {
-                    if (chn->kind != LIBXL_CHANNEL_KIND_NONE) {
+                    if (chn->kind != LIBXL_CHANNEL_KIND_UNKNOWN) {
                         fprintf(stderr, "a channel may have only one kind\n");
                         exit(1);
                     }
-                    if (!strcmp(p2 + 1, "none")) {
-                        chn->kind = LIBXL_CHANNEL_KIND_NONE;
-                    } else if (!strcmp(p2 + 1, "pty")) {
+                    if (!strcmp(p2 + 1, "pty")) {
                         chn->kind = LIBXL_CHANNEL_KIND_PTY;
-                    } else if (!strcmp(p2 + 1, "path")) {
-                        chn->kind = LIBXL_CHANNEL_KIND_PATH;
                     } else if (!strcmp(p2 + 1, "socket")) {
                         chn->kind = LIBXL_CHANNEL_KIND_SOCKET;
                     } else {
