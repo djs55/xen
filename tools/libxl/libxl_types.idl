@@ -51,7 +51,7 @@ libxl_domain_type = Enumeration("domain_type", [
     (2, "PV"),
     ], init_val = -1)
 
-libxl_channel_type = Enumeration("channel_type", [
+libxl_channel_kind = Enumeration("channel_kind", [
     # Connected to nothing:
     (0, "NONE"),
     # Connect to a pty in the backend domain:
@@ -473,7 +473,7 @@ libxl_device_channel = Struct("device_channel", [
     ("backend_domname", string),
     ("devid", libxl_devid),
     ("name", string),
-    ("type", libxl_channel_type),
+    ("kind", libxl_channel_kind),
     ("path", string),
 ])
 

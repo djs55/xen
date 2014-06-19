@@ -392,13 +392,13 @@ static int init_console_from_channel(libxl__gc *gc,
 
     console->backend_domid = channel->backend_domid;
 
-    switch (channel->type) {
-        case LIBXL_CHANNEL_TYPE_NONE:
-        case LIBXL_CHANNEL_TYPE_PTY:
+    switch (channel->kind) {
+        case LIBXL_CHANNEL_KIND_NONE:
+        case LIBXL_CHANNEL_KIND_PTY:
             /* No path is needed */
             break;
-        case LIBXL_CHANNEL_TYPE_PATH:
-        case LIBXL_CHANNEL_TYPE_SOCKET:
+        case LIBXL_CHANNEL_KIND_PATH:
+        case LIBXL_CHANNEL_KIND_SOCKET:
             if (!channel->path) {
                 LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
                            "channel %d has no path", channel->devid);
@@ -407,7 +407,7 @@ static int init_console_from_channel(libxl__gc *gc,
             break;
         default:
             /* We've forgotten to add the clause */
-            LOG(ERROR, "%s: unknown channel type %d", __func__, channel->type);
+            LOG(ERROR, "%s: unknown channel kind %d", __func__, channel->kind);
             return ERROR_INVAL;
     }
 

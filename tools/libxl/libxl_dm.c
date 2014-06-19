@@ -394,7 +394,7 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
     const libxl_sdl_info *sdl = dm_sdl(guest_config);
     const char *keymap = dm_keymap(guest_config);
     flexarray_t *dm_args;
-    int i, type, devid;
+    int i, kind, devid;
     uint64_t ram_size;
     const char *path, *chardev;
 
@@ -414,27 +414,27 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
     flexarray_append(dm_args, "chardev=libxl-cmd,mode=control");
 
     for (i = 0; i < guest_config->num_channels; i++) {
-        type = guest_config->channels[i].type;
+        kind = guest_config->channels[i].kind;
         path = guest_config->channels[i].path;
         devid = guest_config->channels[i].devid;
-        switch (type) {
-            case LIBXL_CHANNEL_TYPE_NONE:
+        switch (kind) {
+            case LIBXL_CHANNEL_KIND_NONE:
                 chardev = GCSPRINTF("null,id=libxl-channel%d", devid);
                 break;
-            case LIBXL_CHANNEL_TYPE_PTY:
+            case LIBXL_CHANNEL_KIND_PTY:
                 chardev = GCSPRINTF("pty,id=libxl-channel%d", devid);
                 break;
-            case LIBXL_CHANNEL_TYPE_PATH:
+            case LIBXL_CHANNEL_KIND_PATH:
                 chardev = GCSPRINTF("file,id=libxl-channel%d,path=%s",
                                     devid, path);
                 break;
-            case LIBXL_CHANNEL_TYPE_SOCKET:
+            case LIBXL_CHANNEL_KIND_SOCKET:
                 chardev = GCSPRINTF("socket,id=libxl-channel%d,path=%s,"
                                     "server,nowait", devid, path);
                 break;
             default:
                 /* We've forgotten to add the clause */
-                LOG(ERROR, "%s: unknown channel type %d", __func__, type);
+                LOG(ERROR, "%s: unknown channel kind %d", __func__, kind);
                 return NULL;
         }
         flexarray_append(dm_args, "-chardev");
