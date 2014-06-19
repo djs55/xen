@@ -363,8 +363,8 @@ static int init_console_info(libxl__gc *gc,
     console->devid = dev_num;
     console->consback = LIBXL__CONSOLE_BACKEND_XENCONSOLED;
     console->output = libxl__strdup(NOGC, "pty");
-    /* console->name is NULL on normal consoles. Only 'channels' when mapped
-       to consoles have a string name. */
+    /* console->{name,kind,path} are NULL on normal consoles.
+       Only 'channels' when mapped to consoles have a string name. */
     return 0;
 }
 
@@ -394,16 +394,16 @@ static int init_console_from_channel(libxl__gc *gc,
 
     switch (channel->kind) {
         case LIBXL_CHANNEL_KIND_NONE:
+            console->kind = libxl__strdup(NOGC, "none");
+            break;
         case LIBXL_CHANNEL_KIND_PTY:
-            /* No path is needed */
+            console->kind = libxl__strdup(NOGC, "pty");
             break;
         case LIBXL_CHANNEL_KIND_PATH:
+            console->kind = libxl__strdup(NOGC, "path");
+            break;
         case LIBXL_CHANNEL_KIND_SOCKET:
-            if (!channel->path) {
-                LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
-                           "channel %d has no path", channel->devid);
-                return ERROR_INVAL;
-            }
+            console->kind = libxl__strdup(NOGC, "socket");
             break;
         default:
             /* We've forgotten to add the clause */
@@ -411,6 +411,15 @@ static int init_console_from_channel(libxl__gc *gc,
             return ERROR_INVAL;
     }
 
+    if (channel->kind == LIBXL_CHANNEL_KIND_PATH
+        || channel->kind == LIBXL_CHANNEL_KIND_SOCKET) {
+            if (!channel->path) {
+                LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
+                           "channel %d has no path", channel->devid);
+                return ERROR_INVAL;
+            }
+           console->path = libxl__strdup(NOGC, channel->path);
+    }
     /* Use qemu chardev for every channel */
     console->output = libxl__sprintf(NOGC, "chardev:libxl-channel%d",
                                      channel->devid);

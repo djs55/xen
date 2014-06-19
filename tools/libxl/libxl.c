@@ -3223,6 +3223,14 @@ int libxl__device_console_add(libxl__gc *gc, uint32_t domid,
         flexarray_append(ro_front, "name");
         flexarray_append(ro_front, console->name);
     }
+    if (console->kind) {
+        flexarray_append(back, "kind");
+        flexarray_append(back, console->kind);
+    }
+    if (console->path) {
+        flexarray_append(back, "path");
+        flexarray_append(back, console->path);
+    }
 
     flexarray_append(front, "backend-id");
     flexarray_append(front, libxl__sprintf(gc, "%d", console->backend_domid));
