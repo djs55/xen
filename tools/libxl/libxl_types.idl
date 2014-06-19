@@ -253,6 +253,16 @@ libxl_cpupoolinfo = Struct("cpupoolinfo", [
     ("cpumap",      libxl_bitmap)
     ], dir=DIR_OUT)
 
+libxl_channelinfo = Struct("channelinfo", [
+    ("backend", string),
+    ("backend_id", uint32),
+    ("frontend", string),
+    ("frontend_id", uint32),
+    ("devid", libxl_devid),
+    ("state", integer),
+    ("kind", libxl_channel_kind),
+    ], dir=DIR_OUT)
+
 libxl_vminfo = Struct("vminfo", [
     ("uuid", libxl_uuid),
     ("domid", libxl_domid),

@@ -3270,6 +3270,258 @@ out:
 
 /******************************************************************************/
 
+int libxl__init_console_from_channel(libxl__gc *gc,
+                                     libxl__device_console *console,
+                                     int dev_num,
+                                     libxl_device_channel *channel)
+{
+    int rc;
+    libxl__device_console_init(console);
+    console->devid = dev_num;
+    console->consback = LIBXL__CONSOLE_BACKEND_IOEMU;
+    if (!channel->name){
+        LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
+                   "channel %d has no name", channel->devid);
+        return ERROR_INVAL;
+    }
+    console->name = libxl__strdup(NOGC, channel->name);
+
+    if (channel->backend_domname) {
+        rc = libxl_domain_qualifier_to_domid(CTX, channel->backend_domname,
+                                             &channel->backend_domid);
+        if (rc < 0) return rc;
+    }
+
+    console->backend_domid = channel->backend_domid;
+
+    switch (channel->kind) {
+        case LIBXL_CHANNEL_KIND_UNKNOWN:
+            LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
+                       "channel %d has no kind", channel->devid);
+            return ERROR_INVAL;
+        case LIBXL_CHANNEL_KIND_PTY:
+            console->kind = libxl__strdup(NOGC, "pty");
+            break;
+        case LIBXL_CHANNEL_KIND_SOCKET:
+            console->kind = libxl__strdup(NOGC, "socket");
+            if (!channel->path) {
+                LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
+                           "channel %d has no path", channel->devid);
+                return ERROR_INVAL;
+            }
+            console->path = libxl__strdup(NOGC, channel->path);
+            break;
+        default:
+            /* We've forgotten to add the clause */
+            LOG(ERROR, "%s: unknown channel kind %d", __func__, channel->kind);
+            return ERROR_INVAL;
+    }
+
+    /* Use qemu chardev for every channel */
+    console->output = libxl__sprintf(NOGC, "chardev:libxl-channel%d",
+                                     channel->devid);
+
+    return 0;
+}
+
+void libxl__device_channel_add(libxl__egc *egc, uint32_t domid,
+                               libxl_device_channel *channel,
+                               libxl__ao_device *aodev)
+{
+    STATE_AO_GC(aodev->ao);
+    libxl__device_console console;
+    int rc = 0;
+
+    /* Channels are mapped to consoles starting at 1 */
+    rc = libxl__init_console_from_channel(gc, &console, channel->devid + 1,
+                                          channel);
+    if (rc)
+        goto out;
+
+    rc = libxl__device_console_add(gc, domid, &console, NULL);
+out:
+    libxl__device_console_dispose(&console);
+    aodev->rc = rc;
+    if(rc) aodev->callback(egc, aodev);
+    return;
+}
+
+static int libxl__device_from_channel(libxl__gc *gc, uint32_t domid,
+                                      libxl_device_channel *channel,
+                                      libxl__device *device)
+{
+    device->backend_devid    = channel->devid;
+    device->backend_domid    = channel->backend_domid;
+    device->backend_kind     = LIBXL__DEVICE_KIND_CONSOLE;
+    device->devid            = channel->devid;
+    device->domid            = domid;
+    device->kind             = LIBXL__DEVICE_KIND_CONSOLE;
+
+    return 0;
+}
+
+static int libxl__device_channel_from_xs_be(libxl__gc *gc,
+                                            const char *be_path,
+                                            libxl_device_channel *channel)
+{
+    const char *tmp;
+    int rc;
+
+    libxl_device_channel_init(channel);
+
+    /* READ_BACKEND is from libxl__device_nic_from_xs_be above */
+    channel->name = READ_BACKEND(NOGC, "name");
+    tmp = READ_BACKEND(gc, "kind");
+    if (!strcmp(tmp, "pty")) {
+        channel->kind = LIBXL_CHANNEL_KIND_PTY;
+    } else if (!strcmp(tmp, "socket")) {
+        channel->kind = LIBXL_CHANNEL_KIND_SOCKET;
+    } else {
+	rc = ERROR_INVAL;
+        goto out;
+    }
+    channel->path = READ_BACKEND(NOGC, "path");
+
+    rc = 0;
+ out:
+    return rc;
+}
+
+int libxl_devid_to_device_channel(libxl_ctx *ctx, uint32_t domid,
+                                  int devid, libxl_device_channel *channel)
+{
+    GC_INIT(ctx);
+    char *dompath, *path;
+    int rc = ERROR_FAIL;
+
+    libxl_device_channel_init(channel);
+    dompath = libxl__xs_get_dompath(gc, domid);
+    if (!dompath)
+        goto out;
+
+    path = libxl__xs_read(gc, XBT_NULL,
+                          GCSPRINTF("%s/device/console/%d/backend",
+                          dompath, devid + 1 /* 0 is reserved */));
+    if (!path)
+        goto out;
+
+    rc = libxl__device_channel_from_xs_be(gc, path, channel);
+    if (rc) goto out;
+
+    rc = 0;
+out:
+    GC_FREE;
+    return rc;
+}
+
+static int libxl__append_channel_list_of_type(libxl__gc *gc,
+                                              uint32_t domid,
+                                              const char *type,
+                                              libxl_device_channel **channels,
+                                              int *nchannels)
+{
+    char *be_path = NULL;
+    char **dir = NULL;
+    unsigned int n = 0, devid = 0;
+    libxl_device_channel *next = NULL;
+    int rc = 0, i;
+
+    be_path = GCSPRINTF("%s/backend/%s/%d",
+                        libxl__xs_get_dompath(gc, 0), type, domid);
+    dir = libxl__xs_directory(gc, XBT_NULL, be_path, &n);
+    if (!dir || !n)
+      goto out;
+
+    for (i = 0; i < n; i++) {
+        const char *p, *name;
+        libxl_device_channel *tmp;
+        p = libxl__sprintf(gc, "%s/%s", be_path, dir[i]);
+        name = libxl__xs_read(gc, XBT_NULL, GCSPRINTF("%s/name", p));
+        /* 'channels' are consoles with names, so ignore all consoles
+           without names */
+        if (!name) continue;
+        tmp = realloc(*channels,
+                      sizeof(libxl_device_channel) * (*nchannels + devid + 1));
+        if (!tmp) {
+          rc = ERROR_NOMEM;
+          goto out;
+        }
+        *channels = tmp;
+        next = *channels + *nchannels + devid;
+        rc = libxl__device_channel_from_xs_be(gc, p, next);
+        if (rc) goto out;
+        devid++;
+    }
+    *nchannels += devid;
+    return 0;
+
+ out:
+    return rc;
+}
+
+libxl_device_channel *libxl_device_channel_list(libxl_ctx *ctx,
+                                                uint32_t domid,
+                                                int *num)
+{
+    GC_INIT(ctx);
+    libxl_device_channel *channels = NULL;
+    int rc;
+
+    *num = 0;
+
+    rc = libxl__append_channel_list_of_type(gc, domid, "console", &channels, num);
+    if (rc) goto out_err;
+
+    GC_FREE;
+    return channels;
+
+out_err:
+    LIBXL__LOG(ctx, LIBXL__LOG_ERROR, "Unable to list channels");
+    while (*num) {
+        (*num)--;
+        libxl_device_channel_dispose(&channels[*num]);
+    }
+    free(channels);
+    return NULL;
+}
+
+int libxl_device_channel_getinfo(libxl_ctx *ctx, uint32_t domid,
+                                 libxl_device_channel *channel,
+                                 libxl_channelinfo *channelinfo)
+{
+    GC_INIT(ctx);
+    char *dompath, *chnpath;
+    char *val;
+
+    dompath = libxl__xs_get_dompath(gc, domid);
+    channelinfo->devid = channel->devid;
+
+    chnpath = libxl__sprintf(gc, "%s/device/console/%d", dompath,
+                             channelinfo->devid + 1);
+    channelinfo->backend = xs_read(ctx->xsh, XBT_NULL,
+                                   libxl__sprintf(gc, "%s/backend",
+                                   chnpath), NULL);
+    if (!channelinfo->backend) {
+        GC_FREE;
+        return ERROR_FAIL;
+    }
+    val = libxl__xs_read(gc, XBT_NULL, GCSPRINTF("%s/backend-id", chnpath));
+    channelinfo->backend_id = val ? strtoul(val, NULL, 10) : -1;
+    val = libxl__xs_read(gc, XBT_NULL, GCSPRINTF("%s/state", chnpath));
+    channelinfo->state = val ? strtoul(val, NULL, 10) : -1;
+    channelinfo->frontend = xs_read(ctx->xsh, XBT_NULL,
+                                    GCSPRINTF("%s/frontend",
+                                    channelinfo->backend), NULL);
+    val = libxl__xs_read(gc, XBT_NULL, GCSPRINTF("%s/frontend-id",
+                         channelinfo->backend));
+    channelinfo->frontend_id = val ? strtoul(val, NULL, 10) : -1;
+
+    GC_FREE;
+    return 0;
+}
+
+/******************************************************************************/
+
 int libxl__device_vkb_setdefault(libxl__gc *gc, libxl_device_vkb *vkb)
 {
     int rc;
@@ -3477,6 +3729,8 @@ out:
  * libxl_device_disk_destroy
  * libxl_device_nic_remove
  * libxl_device_nic_destroy
+ * libxl_device_channel_remove
+ * libxl_device_channel_destroy
  * libxl_device_vtpm_remove
  * libxl_device_vtpm_destroy
  * libxl_device_vkb_remove
@@ -3521,6 +3775,10 @@ DEFINE_DEVICE_REMOVE(disk, destroy, 1)
 DEFINE_DEVICE_REMOVE(nic, remove, 0)
 DEFINE_DEVICE_REMOVE(nic, destroy, 1)
 
+/* channel */
+DEFINE_DEVICE_REMOVE(channel, remove, 0)
+DEFINE_DEVICE_REMOVE(channel, destroy, 1)
+
 /* vkb */
 DEFINE_DEVICE_REMOVE(vkb, remove, 0)
 DEFINE_DEVICE_REMOVE(vkb, destroy, 1)
@@ -3542,6 +3800,7 @@ DEFINE_DEVICE_REMOVE(vtpm, destroy, 1)
 /* The following functions are defined:
  * libxl_device_disk_add
  * libxl_device_nic_add
+ * libxl_device_channel_add
  * libxl_device_vtpm_add
  */
 
@@ -3568,6 +3827,9 @@ DEFINE_DEVICE_ADD(disk)
 
 /* nic */
 DEFINE_DEVICE_ADD(nic)
+
+/* channel */
+DEFINE_DEVICE_ADD(channel)
 
 /* vtpm */
 DEFINE_DEVICE_ADD(vtpm)

@@ -368,61 +368,6 @@ static int init_console_info(libxl__gc *gc,
     return 0;
 }
 
-static int init_console_from_channel(libxl__gc *gc,
-                                     libxl__device_console *console,
-                                     int dev_num,
-                                     libxl_device_channel *channel)
-{
-    int rc;
-    libxl__device_console_init(console);
-    console->devid = dev_num;
-    console->consback = LIBXL__CONSOLE_BACKEND_IOEMU;
-    if (!channel->name){
-        LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
-                   "channel %d has no name", channel->devid);
-        return ERROR_INVAL;
-    }
-    console->name = libxl__strdup(NOGC, channel->name);
-
-    if (channel->backend_domname) {
-        rc = libxl_domain_qualifier_to_domid(CTX, channel->backend_domname,
-                                             &channel->backend_domid);
-        if (rc < 0) return rc;
-    }
-
-    console->backend_domid = channel->backend_domid;
-
-    switch (channel->kind) {
-        case LIBXL_CHANNEL_KIND_UNKNOWN:
-            LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
-                       "channel %d has no kind", channel->devid);
-            return ERROR_INVAL;
-        case LIBXL_CHANNEL_KIND_PTY:
-            console->kind = libxl__strdup(NOGC, "pty");
-            break;
-        case LIBXL_CHANNEL_KIND_SOCKET:
-            console->kind = libxl__strdup(NOGC, "socket");
-            if (!channel->path) {
-                LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
-                           "channel %d has no path", channel->devid);
-                return ERROR_INVAL;
-            }
-            console->path = libxl__strdup(NOGC, channel->path);
-            break;
-        default:
-            /* We've forgotten to add the clause */
-            LOG(ERROR, "%s: unknown channel kind %d", __func__, channel->kind);
-            return ERROR_INVAL;
-    }
-
-    /* Use qemu chardev for every channel */
-    console->output = libxl__sprintf(NOGC, "chardev:libxl-channel%d",
-                                     channel->devid);
-
-    return 0;
-}
-
-
 int libxl__domain_build(libxl__gc *gc,
                         libxl_domain_config *d_config,
                         uint32_t domid,
@@ -1171,7 +1116,8 @@ static void domcreate_launch_dm(libxl__egc *egc, libxl__multidev *multidev,
        map channels to IOEMU consoles starting at 1 */
     for (i = 0; i < d_config->num_channels; i++) {
         libxl__device_console console;
-        ret = init_console_from_channel(gc, &console, i + 1, &d_config->channels[i]);
+        ret = libxl__init_console_from_channel(gc, &console, i + 1,
+                                               &d_config->channels[i]);
         if ( ret )
             goto error_out;
         libxl__device_console_add(gc, domid, &console, NULL);

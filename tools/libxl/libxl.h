@@ -956,6 +956,27 @@ libxl_device_nic *libxl_device_nic_list(libxl_ctx *ctx, uint32_t domid, int *num
 int libxl_device_nic_getinfo(libxl_ctx *ctx, uint32_t domid,
                               libxl_device_nic *nic, libxl_nicinfo *nicinfo);
 
+/* Virtual Channels */
+int libxl_device_channel_add(libxl_ctx *ctx, uint32_t domid,
+                             libxl_device_channel *channel,
+                             const libxl_asyncop_how *ao_how)
+                             LIBXL_EXTERNAL_CALLERS_ONLY;
+int libxl_device_channel_remove(libxl_ctx *ctx, uint32_t domid,
+                                libxl_device_channel *channel,
+                                const libxl_asyncop_how *ao_how)
+                                LIBXL_EXTERNAL_CALLERS_ONLY;
+int libxl_device_channel_destroy(libxl_ctx *ctx, uint32_t domid,
+                                 libxl_device_channel *channel,
+                                 const libxl_asyncop_how *ao_how)
+                                 LIBXL_EXTERNAL_CALLERS_ONLY;
+
+libxl_device_channel *libxl_device_channel_list(libxl_ctx *ctx,
+                                                uint32_t domid,
+                                                int *num);
+int libxl_device_channel_getinfo(libxl_ctx *ctx, uint32_t domid,
+                                 libxl_device_channel *channel,
+                                 libxl_channelinfo *channelinfo);
+
 /* Virtual TPMs */
 int libxl_device_vtpm_add(libxl_ctx *ctx, uint32_t domid, libxl_device_vtpm *vtpm,
                           const libxl_asyncop_how *ao_how)

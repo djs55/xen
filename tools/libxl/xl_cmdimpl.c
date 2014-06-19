@@ -5973,6 +5973,123 @@ int main_networkdetach(int argc, char **argv)
     return 0;
 }
 
+int main_channelattach(int argc, char **argv)
+{
+    int opt;
+    uint32_t domid;
+    libxl_device_channel channel;
+    XLU_Config *config = 0;
+    char *oparg;
+
+    SWITCH_FOREACH_OPT(opt, "", NULL, "channel-attach", 1) {
+        /* No options */
+    }
+
+    domid = find_domain(argv[optind]);
+
+    config= xlu_cfg_init(stderr, "command line");
+    if (!config) {
+        fprintf(stderr, "Failed to allocate for configuration\n");
+        return 1;
+    }
+
+    libxl_device_channel_init(&channel);
+    for (argv += optind+1, argc -= optind+1; argc > 0; ++argv, --argc) {
+        if (MATCH_OPTION("kind", *argv, oparg)) {
+            if (!strcmp("pty", oparg)) {
+                channel.kind = LIBXL_CHANNEL_KIND_PTY;
+            } else if (!strcmp("socket", oparg)) {
+                channel.kind = LIBXL_CHANNEL_KIND_SOCKET;
+            } else {
+                fprintf(stderr, "Invalid parameter `kind'.\n");
+                return 1;
+            }
+        } else if (MATCH_OPTION("path", *argv, oparg)) {
+            replace_string(&channel.path, oparg);
+        } else if (MATCH_OPTION("name", *argv, oparg)) {
+            replace_string(&channel.name, oparg);
+        } else {
+            fprintf(stderr, "unrecognized argument `%s'\n", *argv);
+            return 1;
+        }
+    }
+
+    if (dryrun_only) {
+        char *json = libxl_device_channel_to_json(ctx, &channel);
+        printf("channel: %s\n", json);
+        free(json);
+        libxl_device_channel_dispose(&channel);
+        if (ferror(stdout) || fflush(stdout)) { perror("stdout"); exit(-1); }
+        return 0;
+    }
+
+    if (libxl_device_channel_add(ctx, domid, &channel, 0)) {
+        fprintf(stderr, "libxl_device_channel_add failed.\n");
+        return 1;
+    }
+    libxl_device_channel_dispose(&channel);
+    xlu_cfg_destroy(config);
+    return 0;
+}
+
+int main_channellist(int argc, char **argv)
+{
+    int opt;
+    libxl_device_channel *channels;
+    libxl_channelinfo channelinfo;
+    int nb, i;
+
+    SWITCH_FOREACH_OPT(opt, "", NULL, "channel-list", 1) {
+        /* No options */
+    }
+
+    /*      Idx  BE   MAC   Hdl  Sta  evch txr/rxr  BE-path */
+    printf("%-3s %-2s %-17s %-6s %-5s %-6s %5s/%-5s %-30s\n",
+           "Idx", "BE", "Mac Addr.", "handle", "state", "evt-ch", "tx-", "rx-ring-ref", "BE-path");
+    for (argv += optind, argc -= optind; argc > 0; --argc, ++argv) {
+        uint32_t domid = find_domain(*argv);
+        channels = libxl_device_channel_list(ctx, domid, &nb);
+        if (!channels) {
+            continue;
+        }
+        for (i = 0; i < nb; ++i) {
+            if (!libxl_device_channel_getinfo(ctx, domid, &channels[i], &channelinfo)) {
+                /* Idx BE */
+                printf("%-3d %-2d ", channelinfo.devid, channelinfo.backend_id);
+                /* PTY + /dev/pty; SOCKET + path */
+                libxl_channelinfo_dispose(&channelinfo);
+            }
+            libxl_device_channel_dispose(&channels[i]);
+        }
+        free(channels);
+    }
+    return 0;
+}
+
+int main_channeldetach(int argc, char **argv)
+{
+    uint32_t domid;
+    int opt;
+    libxl_device_channel channel;
+
+    SWITCH_FOREACH_OPT(opt, "", NULL, "channel-detach", 2) {
+        /* No options */
+    }
+
+    domid = find_domain(argv[optind]);
+
+    if (libxl_devid_to_device_channel(ctx, domid, atoi(argv[optind+1]), &channel)) {
+        fprintf(stderr, "Unknown device %s.\n", argv[optind+1]);
+        return 1;
+    }
+    if (libxl_device_channel_remove(ctx, domid, &channel, 0)) {
+        fprintf(stderr, "libxl_device_channel_remove failed.\n");
+        return 1;
+    }
+    libxl_device_channel_dispose(&channel);
+    return 0;
+}
+
 int main_blockattach(int argc, char **argv)
 {
     int opt;
