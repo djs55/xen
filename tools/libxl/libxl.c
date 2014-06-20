@@ -3330,10 +3330,20 @@ void libxl__device_channel_add(libxl__egc *egc, uint32_t domid,
     STATE_AO_GC(aodev->ao);
     libxl__device_console console;
     int rc = 0;
+    int devid = channel->devid;
 
-    /* Channels are mapped to consoles starting at 1 */
-    rc = libxl__init_console_from_channel(gc, &console, channel->devid + 1,
-                                          channel);
+    if (devid == -1) {
+        if ((devid = libxl__device_nextid(gc, domid, "console")) < 0) {
+            rc = ERROR_FAIL;
+            goto out;
+        }
+
+        /* 0th device is reserved as a regular console */
+        if (devid == 0)
+            devid = 1;
+    }
+
+    rc = libxl__init_console_from_channel(gc, &console, devid, channel);
     if (rc)
         goto out;
 
