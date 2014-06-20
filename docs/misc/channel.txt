@@ -29,20 +29,21 @@ and handle the device appropriately. For example the frontend could
 spawn a guest agent when a channel with a well-known name is created,
 and still spawn regular getty processes when a normal console is created.
 
-The backend is configured by 2 xenstore keys:
+The backend has an associated 'kind' which describes what the backend
+should do with the data. Thee are two defined values: 'pty' and 'socket'.
 
-  kind = ( pty | socket )
-  path = <some path>
+If 'kind=pty' then the backend will connect to a PTY like a regular
+console. The pty device will be written into the 'tty' key in the
+frontend.
 
-The configuration should be interpreted as follows:
+If 'kind=socket' then the backend will create a listening Unix domain
+socket in the path given by 'path=<path>'. Connections will be
+accepted and the data proxied in both directions.
 
-  kind = pty: the backend will connect to a PTY like a regular console
-  kind = socket: the backend will accept a connection on the Unix
-    domain socket given by 'path' and proxy data to and from the device.
-
-In the default implementation where the backend is run in the toolstack
-domain, the qemu "chardev" mechanism is used. Internally this writes
-the 2 xenstore keys for the backend to the frontend:
+In the default implementation the backend is implemented via the
+qemu "chardev" mechanism, in a similar way to qemu qdisks.
+Internally libxl will configure the backend by writing the following
+2 keys to the frontend:
 
   type = ioemu
   output = chardev:libxl-channel$DEVID

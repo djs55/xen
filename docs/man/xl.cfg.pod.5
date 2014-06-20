@@ -496,40 +496,24 @@ name for the specific application (e.g. guest agent) and should be used
 by the frontend to connect the application to the right channel device.
 This parameter is mandatory.
 
-=item C<type=TYPE>
+=item C<kind=KING>
 
 Specify how the backend should manifest. This should be one of the
 following possibilities:
 
 =over 4
 
-=item B<type=NONE>:
-
-The backend should be connected to the equivalent of
-B</dev/null>.
-
-=item B<type=FILE>:
-
-The backend should be connected to a file such that the
-console output is read and spooled to the file (e.g. for logging).
-
-=item B<type=SOCKET>:
+=item B<kind=SOCKET>:
 
 The backend should be connected to the equivalent of
 a Unix domain socket.
 
-=item B<type=PTY>:
+=item B<kind=PTY>:
 
 The backend should be connected to the equivalent of a
 pty.
 
 =back
-
-=item C<path=PATH>
-
-If C<type=FILE> then this path is the file to which the console output
-should be logged. If C<type=SOCKET> then this is the path of the Unix domain
-socket which should be connected to the channel.
 
 =back
 
