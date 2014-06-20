@@ -482,6 +482,15 @@
  */
 #define LIBXL_HAVE_DEVICE_PCI_SEIZE 1
 
+/*
+ * LIBXL_HAVE_DEVICE_CHANNEL
+ *
+ * If this is defined, then the libxl_device_channel struct exists
+ * and channels can be attached to a domain both at build-time and at
+ * run-time by hotplug.
+ */
+#define LIBXL_HAVE_DEVICE_CHANNEL 1
+
 /* Functions annotated with LIBXL_EXTERNAL_CALLERS_ONLY may not be
  * called from within libxl itself. Callers outside libxl, who
  * do not #include libxl_internal.h, are fine. */
