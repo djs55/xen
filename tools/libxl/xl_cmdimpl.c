@@ -1329,8 +1329,8 @@ static void parse_config_data(const char *config_source,
                         exit(1);
                     }
                 } else if (!strcmp(p, "path")) {
-                    free(chn->path);
-                    chn->path = strdup(p2 + 1);
+                    free(chn->u.socket.path);
+                    chn->u.socket.path = strdup(p2 + 1);
                 } else {
                     fprintf(stderr, "unknown channel parameter '%s',"
                                     " ignoring\n", p);
@@ -6005,7 +6005,7 @@ int main_channelattach(int argc, char **argv)
                 return 1;
             }
         } else if (MATCH_OPTION("path", *argv, oparg)) {
-            replace_string(&channel.path, oparg);
+            replace_string(&channel.u.socket.path, oparg);
         } else if (MATCH_OPTION("name", *argv, oparg)) {
             replace_string(&channel.name, oparg);
         } else {

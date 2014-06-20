@@ -3304,12 +3304,12 @@ int libxl__init_console_from_channel(libxl__gc *gc,
             break;
         case LIBXL_CHANNEL_KIND_SOCKET:
             console->kind = libxl__strdup(NOGC, "socket");
-            if (!channel->path) {
+            if (!channel->u.socket.path) {
                 LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
                            "channel %d has no path", channel->devid);
                 return ERROR_INVAL;
             }
-            console->path = libxl__strdup(NOGC, channel->path);
+            console->path = libxl__strdup(NOGC, channel->u.socket.path);
             break;
         default:
             /* We've forgotten to add the clause */
@@ -3376,11 +3376,11 @@ static int libxl__device_channel_from_xs_be(libxl__gc *gc,
         channel->kind = LIBXL_CHANNEL_KIND_PTY;
     } else if (!strcmp(tmp, "socket")) {
         channel->kind = LIBXL_CHANNEL_KIND_SOCKET;
+        channel->u.socket.path = READ_BACKEND(NOGC, "path");
     } else {
 	rc = ERROR_INVAL;
         goto out;
     }
-    channel->path = READ_BACKEND(NOGC, "path");
 
     rc = 0;
  out:

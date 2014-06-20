@@ -480,8 +480,11 @@ libxl_device_channel = Struct("device_channel", [
     ("backend_domname", string),
     ("devid", libxl_devid),
     ("name", string),
-    ("kind", libxl_channel_kind),
-    ("path", string),
+    ("u", KeyedUnion(None, libxl_channel_kind, "kind",
+           [("unknown", None),
+            ("pty", None),
+            ("socket", Struct(None, [("path", string)])),
+           ])),
 ])
 
 libxl_domain_config = Struct("domain_config", [
