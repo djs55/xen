@@ -40,12 +40,11 @@ If 'kind=socket' then the backend will create a listening Unix domain
 socket in the path given by 'path=<path>'. Connections will be
 accepted and the data proxied in both directions.
 
-In the default implementation the backend is implemented via the
-qemu "chardev" mechanism, in a similar way to qemu qdisks.
-Internally libxl will configure the backend by writing the following
-2 keys to the frontend:
-
-  type = ioemu
+In the default implementation the backend is implemented via qemu
+in "xenpv" mode (i.e. the 'console' device in xenstore will have
+'type=ioemu'). Futhermore if 'kind=socket' then the console 'output'
+in xenstore will be set to:
+ 
   output = chardev:libxl-channel$DEVID
 
 The qemu commandline contains one "-chardev id=libxl-channel$DEVID,..."

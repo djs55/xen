@@ -1584,7 +1584,8 @@ int libxl__need_xenpv_qemu(libxl__gc *gc,
         ret = libxl__get_domid(gc, &domid);
         if (ret) goto out;
         for (i = 0; i < nr_channels; i++) {
-            if (channels[i].backend_domid == domid) {
+            if (channels[i].kind == LIBXL_CHANNEL_KIND_SOCKET &&
+                channels[i].backend_domid == domid) {
                 ret = 1;
                 goto out;
             }

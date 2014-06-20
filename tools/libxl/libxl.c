@@ -3301,6 +3301,7 @@ int libxl__init_console_from_channel(libxl__gc *gc,
             return ERROR_INVAL;
         case LIBXL_CHANNEL_KIND_PTY:
             console->kind = libxl__strdup(NOGC, "pty");
+            console->output = libxl__sprintf(NOGC, "pty");
             break;
         case LIBXL_CHANNEL_KIND_SOCKET:
             console->kind = libxl__strdup(NOGC, "socket");
@@ -3310,16 +3311,14 @@ int libxl__init_console_from_channel(libxl__gc *gc,
                 return ERROR_INVAL;
             }
             console->path = libxl__strdup(NOGC, channel->u.socket.path);
+            console->output = libxl__sprintf(NOGC, "chardev:libxl-channel%d",
+                                             channel->devid);
             break;
         default:
             /* We've forgotten to add the clause */
             LOG(ERROR, "%s: unknown channel kind %d", __func__, channel->kind);
             return ERROR_INVAL;
     }
-
-    /* Use qemu chardev for every channel */
-    console->output = libxl__sprintf(NOGC, "chardev:libxl-channel%d",
-                                     channel->devid);
 
     return 0;
 }
