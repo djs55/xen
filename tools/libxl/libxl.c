@@ -3369,7 +3369,7 @@ static int libxl__device_from_channel(libxl__gc *gc, uint32_t domid,
     device->backend_devid    = channel->devid;
     device->backend_domid    = channel->backend_domid;
     device->backend_kind     = LIBXL__DEVICE_KIND_CONSOLE;
-    device->devid            = channel->devid;
+    device->devid            = channel->devid + 1; /* 0 is reserved */
     device->domid            = domid;
     device->kind             = LIBXL__DEVICE_KIND_CONSOLE;
 
