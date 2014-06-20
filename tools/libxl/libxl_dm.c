@@ -1540,7 +1540,7 @@ int libxl__need_xenpv_qemu(libxl__gc *gc,
         int nr_consoles, libxl__device_console *consoles,
         int nr_vfbs, libxl_device_vfb *vfbs,
         int nr_disks, libxl_device_disk *disks,
-        int nr_channels)
+        int nr_channels, libxl_device_channel *channels)
 {
     int i, ret = 0;
     uint32_t domid;
@@ -1581,8 +1581,14 @@ int libxl__need_xenpv_qemu(libxl__gc *gc,
     }
 
     if (nr_channels > 0) {
-        ret = 1;
-        goto out;
+        ret = libxl__get_domid(gc, &domid);
+        if (ret) goto out;
+        for (i = 0; i < nr_channels; i++) {
+            if (channels[i].backend_domid == domid) {
+                ret = 1;
+                goto out;
+            }
+        }
     }
 
 out:

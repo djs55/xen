@@ -1455,7 +1455,7 @@ _hidden int libxl__need_xenpv_qemu(libxl__gc *gc,
         int nr_consoles, libxl__device_console *consoles,
         int nr_vfbs, libxl_device_vfb *vfbs,
         int nr_disks, libxl_device_disk *disks,
-        int nr_channels);
+        int nr_channels, libxl_device_channel *channels);
 
 /*
  * This function will cause the whole libxl process to hang
