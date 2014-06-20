@@ -3185,11 +3185,11 @@ const char *libxl__device_nic_devname(libxl__gc *gc,
 /******************************************************************************/
 int libxl__device_console_add(libxl__gc *gc, uint32_t domid,
                               libxl__device_console *console,
-                              libxl__domain_build_state *state)
+                              libxl__domain_build_state *state,
+                              libxl__device *device)
 {
     flexarray_t *front, *ro_front;
     flexarray_t *back;
-    libxl__device device;
     int rc;
 
     if (console->devid && state) {
@@ -3201,12 +3201,12 @@ int libxl__device_console_add(libxl__gc *gc, uint32_t domid,
     ro_front = flexarray_make(gc, 16, 1);
     back = flexarray_make(gc, 16, 1);
 
-    device.backend_devid = console->devid;
-    device.backend_domid = console->backend_domid;
-    device.backend_kind = LIBXL__DEVICE_KIND_CONSOLE;
-    device.devid = console->devid;
-    device.domid = domid;
-    device.kind = LIBXL__DEVICE_KIND_CONSOLE;
+    device->backend_devid = console->devid;
+    device->backend_domid = console->backend_domid;
+    device->backend_kind = LIBXL__DEVICE_KIND_CONSOLE;
+    device->devid = console->devid;
+    device->domid = domid;
+    device->kind = LIBXL__DEVICE_KIND_CONSOLE;
 
     flexarray_append(back, "frontend-id");
     flexarray_append(back, libxl__sprintf(gc, "%d", domid));
@@ -3258,8 +3258,7 @@ int libxl__device_console_add(libxl__gc *gc, uint32_t domid,
         flexarray_append(front, "protocol");
         flexarray_append(front, LIBXL_XENCONSOLE_PROTOCOL);
     }
-
-    libxl__device_generic_add(gc, XBT_NULL, &device,
+    libxl__device_generic_add(gc, XBT_NULL, device,
                               libxl__xs_kvs_of_flexarray(gc, back, back->count),
                               libxl__xs_kvs_of_flexarray(gc, front, front->count),
                               libxl__xs_kvs_of_flexarray(gc, ro_front, ro_front->count));
@@ -3329,6 +3328,7 @@ void libxl__device_channel_add(libxl__egc *egc, uint32_t domid,
 {
     STATE_AO_GC(aodev->ao);
     libxl__device_console console;
+    libxl__device *device;
     int rc = 0;
     int devid = channel->devid;
 
@@ -3347,11 +3347,18 @@ void libxl__device_channel_add(libxl__egc *egc, uint32_t domid,
     if (rc)
         goto out;
 
-    rc = libxl__device_console_add(gc, domid, &console, NULL);
+    GCNEW(device);
+    rc = libxl__device_console_add(gc, domid, &console, NULL, device);
+    if (rc)
+        goto out;
+
+    aodev->dev = device;
+    aodev->action = LIBXL__DEVICE_ACTION_ADD;
+    libxl__wait_device_connection(egc, aodev);
 out:
     libxl__device_console_dispose(&console);
     aodev->rc = rc;
-    if(rc) aodev->callback(egc, aodev);
+    if (rc) aodev->callback(egc, aodev);
     return;
 }
 

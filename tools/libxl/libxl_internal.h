@@ -1018,7 +1018,8 @@ _hidden int libxl__device_disk_dev_number(const char *virtpath,
 
 _hidden int libxl__device_console_add(libxl__gc *gc, uint32_t domid,
                                       libxl__device_console *console,
-                                      libxl__domain_build_state *state);
+                                      libxl__domain_build_state *state,
+                                      libxl__device *device);
 
 _hidden int libxl__device_generic_add(libxl__gc *gc, xs_transaction_t t,
         libxl__device *device, char **bents, char **fents, char **ro_fents);

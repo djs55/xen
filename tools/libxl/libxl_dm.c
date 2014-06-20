@@ -1089,6 +1089,7 @@ static void spawn_stub_launch_dm(libxl__egc *egc,
     }
 
     for (i = 0; i < num_console; i++) {
+        libxl__device device;
         console[i].devid = i;
         console[i].consback = LIBXL__CONSOLE_BACKEND_IOEMU;
         /* STUBDOM_CONSOLE_LOGGING (console 0) is for minios logging
@@ -1119,7 +1120,8 @@ static void spawn_stub_launch_dm(libxl__egc *egc,
                 break;
         }
         ret = libxl__device_console_add(gc, dm_domid, &console[i],
-                        i == STUBDOM_CONSOLE_LOGGING ? stubdom_state : NULL);
+                        i == STUBDOM_CONSOLE_LOGGING ? stubdom_state : NULL,
+                        &device);
         if (ret)
             goto out;
     }

@@ -1116,11 +1116,12 @@ static void domcreate_launch_dm(libxl__egc *egc, libxl__multidev *multidev,
        map channels to IOEMU consoles starting at 1 */
     for (i = 0; i < d_config->num_channels; i++) {
         libxl__device_console console;
+        libxl__device device;
         ret = libxl__init_console_from_channel(gc, &console, i + 1,
                                                &d_config->channels[i]);
         if ( ret )
             goto error_out;
-        libxl__device_console_add(gc, domid, &console, NULL);
+        libxl__device_console_add(gc, domid, &console, NULL, &device);
         libxl__device_console_dispose(&console);
     }
 
@@ -1128,13 +1129,14 @@ static void domcreate_launch_dm(libxl__egc *egc, libxl__multidev *multidev,
     case LIBXL_DOMAIN_TYPE_HVM:
     {
         libxl__device_console console;
+        libxl__device device;
         libxl_device_vkb vkb;
 
         ret = init_console_info(gc, &console, 0);
         if ( ret )
             goto error_out;
         console.backend_domid = state->console_domid;
-        libxl__device_console_add(gc, domid, &console, state);
+        libxl__device_console_add(gc, domid, &console, state, &device);
         libxl__device_console_dispose(&console);
 
         libxl_device_vkb_init(&vkb);
@@ -1152,6 +1154,7 @@ static void domcreate_launch_dm(libxl__egc *egc, libxl__multidev *multidev,
     {
         int need_qemu = 0;
         libxl__device_console console;
+        libxl__device device;
 
         for (i = 0; i < d_config->num_vfbs; i++) {
             libxl__device_vfb_add(gc, domid, &d_config->vfbs[i]);
@@ -1168,7 +1171,7 @@ static void domcreate_launch_dm(libxl__egc *egc, libxl__multidev *multidev,
                 d_config->num_channels, &d_config->channels[0]);
 
         console.backend_domid = state->console_domid;
-        libxl__device_console_add(gc, domid, &console, state);
+        libxl__device_console_add(gc, domid, &console, state, &device);
         libxl__device_console_dispose(&console);
 
         if (need_qemu) {
