@@ -3855,7 +3855,7 @@ typedef struct libxl__ddomain_device {
  */
 typedef struct libxl__ddomain_guest {
     uint32_t domid;
-    int num_vifs, num_vbds, num_qdisks;
+    int num_vifs, num_vbds, num_qdisks, num_consoles;
     LIBXL_SLIST_HEAD(, struct libxl__ddomain_device) devices;
     LIBXL_SLIST_ENTRY(struct libxl__ddomain_guest) next;
 } libxl__ddomain_guest;
@@ -3960,7 +3960,7 @@ static int add_device(libxl__egc *egc, libxl__ao *ao,
 
         break;
     case LIBXL__DEVICE_KIND_QDISK:
-        if (dguest->num_qdisks == 0) {
+        if ((dguest->num_qdisks == 0) && (dguest->num_consoles == 0)) {
             GCNEW(dmss);
             dmss->guest_domid = dev->domid;
             dmss->spawn.ao = ao;
@@ -3969,6 +3969,18 @@ static int add_device(libxl__egc *egc, libxl__ao *ao,
             libxl__spawn_qdisk_backend(egc, dmss);
         }
         dguest->num_qdisks++;
+
+        break;
+    case LIBXL__DEVICE_KIND_CONSOLE:
+        if ((dguest->num_qdisks == 0) && (dguest->num_consoles == 0)) {
+            GCNEW(dmss);
+            dmss->guest_domid = dev->domid;
+            dmss->spawn.ao = ao;
+            dmss->callback = qdisk_spawn_outcome;
+
+            libxl__spawn_qdisk_backend(egc, dmss);
+        }
+        dguest->num_consoles++;
 
         break;
     default:
