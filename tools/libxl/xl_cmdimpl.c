@@ -6044,8 +6044,8 @@ int main_channellist(int argc, char **argv)
     }
 
     /*      Idx  BE   MAC   Hdl  Sta  evch txr/rxr  BE-path */
-    printf("%-3s %-2s %-17s %-6s %-5s %-6s %5s/%-5s %-30s\n",
-           "Idx", "BE", "Mac Addr.", "handle", "state", "evt-ch", "tx-", "rx-ring-ref", "BE-path");
+    printf("%-3s %-2s %-5s %-6s %8s %-10s %-30s\n",
+           "Idx", "BE", "state", "evt-ch", "ring-ref", "kind", "");
     for (argv += optind, argc -= optind; argc > 0; --argc, ++argv) {
         uint32_t domid = find_domain(*argv);
         channels = libxl_device_channel_list(ctx, domid, &nb);
@@ -6054,9 +6054,18 @@ int main_channellist(int argc, char **argv)
         }
         for (i = 0; i < nb; ++i) {
             if (!libxl_device_channel_getinfo(ctx, domid, &channels[i], &channelinfo)) {
-                /* Idx BE */
-                printf("%-3d %-2d ", channelinfo.devid, channelinfo.backend_id);
-                /* PTY + /dev/pty; SOCKET + path */
+                printf("%-3d %-2d ", channels[i].devid, channelinfo.backend_id);
+                printf("%-5d ", channelinfo.state);
+                printf("%-6d %-8d ", channelinfo.evtch, channelinfo.rref);
+                printf("%-10s ", libxl_channel_kind_to_string(channels[i].kind));
+                switch (channels[i].kind) {
+                    case LIBXL_CHANNEL_KIND_PTY:
+                        printf("%-30s ", channelinfo.u.pty.path);
+                        break;
+                    default:
+                        break;
+                }
+                printf("\n");
                 libxl_channelinfo_dispose(&channelinfo);
             }
             libxl_device_channel_dispose(&channels[i]);

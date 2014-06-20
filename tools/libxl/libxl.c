@@ -3407,6 +3407,7 @@ int libxl_devid_to_device_channel(libxl_ctx *ctx, uint32_t domid,
 
     rc = libxl__device_channel_from_xs_be(gc, path, channel);
     if (rc) goto out;
+    channel->devid = devid;
 
     rc = 0;
 out:
@@ -3420,26 +3421,27 @@ static int libxl__append_channel_list_of_type(libxl__gc *gc,
                                               libxl_device_channel **channels,
                                               int *nchannels)
 {
-    char *be_path = NULL;
+    char *fe_path = NULL, *be_path = NULL;
     char **dir = NULL;
     unsigned int n = 0, devid = 0;
     libxl_device_channel *next = NULL;
     int rc = 0, i;
 
-    be_path = GCSPRINTF("%s/backend/%s/%d",
-                        libxl__xs_get_dompath(gc, 0), type, domid);
-    dir = libxl__xs_directory(gc, XBT_NULL, be_path, &n);
+    fe_path = GCSPRINTF("%s/device/%s",
+                        libxl__xs_get_dompath(gc, domid), type);
+    dir = libxl__xs_directory(gc, XBT_NULL, fe_path, &n);
     if (!dir || !n)
       goto out;
 
     for (i = 0; i < n; i++) {
         const char *p, *name;
         libxl_device_channel *tmp;
-        p = libxl__sprintf(gc, "%s/%s", be_path, dir[i]);
+        p = libxl__sprintf(gc, "%s/%s", fe_path, dir[i]);
         name = libxl__xs_read(gc, XBT_NULL, GCSPRINTF("%s/name", p));
         /* 'channels' are consoles with names, so ignore all consoles
            without names */
         if (!name) continue;
+        be_path = libxl__xs_read(gc, XBT_NULL, GCSPRINTF("%s/backend", p));
         tmp = realloc(*channels,
                       sizeof(libxl_device_channel) * (*nchannels + devid + 1));
         if (!tmp) {
@@ -3448,8 +3450,9 @@ static int libxl__append_channel_list_of_type(libxl__gc *gc,
         }
         *channels = tmp;
         next = *channels + *nchannels + devid;
-        rc = libxl__device_channel_from_xs_be(gc, p, next);
+        rc = libxl__device_channel_from_xs_be(gc, be_path, next);
         if (rc) goto out;
+        next->devid = devid;
         devid++;
     }
     *nchannels += devid;
@@ -3490,24 +3493,24 @@ int libxl_device_channel_getinfo(libxl_ctx *ctx, uint32_t domid,
                                  libxl_channelinfo *channelinfo)
 {
     GC_INIT(ctx);
-    char *dompath, *chnpath;
+    char *dompath, *fe_path;
     char *val;
 
     dompath = libxl__xs_get_dompath(gc, domid);
     channelinfo->devid = channel->devid;
 
-    chnpath = libxl__sprintf(gc, "%s/device/console/%d", dompath,
+    fe_path = libxl__sprintf(gc, "%s/device/console/%d", dompath,
                              channelinfo->devid + 1);
     channelinfo->backend = xs_read(ctx->xsh, XBT_NULL,
                                    libxl__sprintf(gc, "%s/backend",
-                                   chnpath), NULL);
+                                   fe_path), NULL);
     if (!channelinfo->backend) {
         GC_FREE;
         return ERROR_FAIL;
     }
-    val = libxl__xs_read(gc, XBT_NULL, GCSPRINTF("%s/backend-id", chnpath));
+    val = libxl__xs_read(gc, XBT_NULL, GCSPRINTF("%s/backend-id", fe_path));
     channelinfo->backend_id = val ? strtoul(val, NULL, 10) : -1;
-    val = libxl__xs_read(gc, XBT_NULL, GCSPRINTF("%s/state", chnpath));
+    val = libxl__xs_read(gc, XBT_NULL, GCSPRINTF("%s/state", fe_path));
     channelinfo->state = val ? strtoul(val, NULL, 10) : -1;
     channelinfo->frontend = xs_read(ctx->xsh, XBT_NULL,
                                     GCSPRINTF("%s/frontend",
@@ -3515,7 +3518,20 @@ int libxl_device_channel_getinfo(libxl_ctx *ctx, uint32_t domid,
     val = libxl__xs_read(gc, XBT_NULL, GCSPRINTF("%s/frontend-id",
                          channelinfo->backend));
     channelinfo->frontend_id = val ? strtoul(val, NULL, 10) : -1;
+    val = libxl__xs_read(gc, XBT_NULL, GCSPRINTF("%s/ring-ref", fe_path));
+    channelinfo->rref = val ? strtoul(val, NULL, 10) : -1;
+    val = libxl__xs_read(gc, XBT_NULL, GCSPRINTF("%s/port", fe_path));
+    channelinfo->evtch = val ? strtoul(val, NULL, 10) : -1;
 
+    channelinfo->kind = channel->kind;
+    switch (channel->kind) {
+         case LIBXL_CHANNEL_KIND_PTY:
+             val = libxl__xs_read(gc, XBT_NULL, GCSPRINTF("%s/tty", fe_path));
+             channelinfo->u.pty.path = strdup(val);
+             break;
+         default:
+             break;
+    }
     GC_FREE;
     return 0;
 }

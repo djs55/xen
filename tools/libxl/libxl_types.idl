@@ -260,7 +260,13 @@ libxl_channelinfo = Struct("channelinfo", [
     ("frontend_id", uint32),
     ("devid", libxl_devid),
     ("state", integer),
-    ("kind", libxl_channel_kind),
+    ("evtch", integer),
+    ("rref", integer),
+    ("u", KeyedUnion(None, libxl_channel_kind, "kind",
+           [("unknown", None),
+            ("pty", Struct(None, [("path", string),])),
+            ("socket", None),
+           ])),
     ], dir=DIR_OUT)
 
 libxl_vminfo = Struct("vminfo", [
