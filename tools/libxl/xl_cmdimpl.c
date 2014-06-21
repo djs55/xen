@@ -736,7 +736,7 @@ static void parse_config_data(const char *config_source,
     long l;
     XLU_Config *config;
     XLU_ConfigList *cpus, *vbds, *nics, *pcis, *cvfbs, *cpuids, *vtpms;
-    XLU_ConfigList *ioports, *irqs, *iomem;
+    XLU_ConfigList *channels, *ioports, *irqs, *iomem;
     int num_ioports, num_irqs, num_iomem;
     int pci_power_mgmt = 0;
     int pci_msitranslate = 0;
@@ -1286,6 +1286,58 @@ static void parse_config_data(const char *config_source,
             }
             free(buf2);
             d_config->num_vtpms++;
+        }
+    }
+
+    if (!xlu_cfg_get_list (config, "channel", &channels, 0, 0)) {
+        d_config->num_channels = 0;
+        d_config->channels = NULL;
+        while ((buf = xlu_cfg_get_listitem (channels,
+                d_config->num_channels)) != NULL) {
+            libxl_device_channel *chn;
+            char *buf2 = strdup(buf);
+            char *p, *p2;
+            chn = ARRAY_EXTEND_INIT(d_config->channels, d_config->num_channels,
+                                    libxl_device_channel_init);
+
+            p = strtok(buf2, ",");
+            if (!p)
+                goto skip_channel;
+            do {
+                while (*p == ' ')
+                    p++;
+                if ((p2 = strchr(p, '=')) == NULL)
+                    break;
+                *p2 = '\0';
+                if (!strcmp(p, "backend")) {
+                    free(chn->backend_domname);
+                    chn->backend_domname = strdup(p2 + 1);
+                } else if (!strcmp(p, "name")) {
+                    free(chn->name);
+                    chn->name = strdup(p2 + 1);
+                } else if (!strcmp(p, "kind")) {
+                    if (chn->kind != LIBXL_CHANNEL_KIND_UNKNOWN) {
+                        fprintf(stderr, "a channel may have only one kind\n");
+                        exit(1);
+                    }
+                    if (!strcmp(p2 + 1, "pty")) {
+                        chn->kind = LIBXL_CHANNEL_KIND_PTY;
+                    } else if (!strcmp(p2 + 1, "socket")) {
+                        chn->kind = LIBXL_CHANNEL_KIND_SOCKET;
+                    } else {
+                        fprintf(stderr, "unknown channel kind '%s'\n", p2 + 1);
+                        exit(1);
+                    }
+                } else if (!strcmp(p, "path")) {
+                    free(chn->u.socket.path);
+                    chn->u.socket.path = strdup(p2 + 1);
+                } else {
+                    fprintf(stderr, "unknown channel parameter '%s',"
+                                    " ignoring\n", p);
+                }
+            } while ((p = strtok(NULL, ",")) != NULL);
+skip_channel:
+            free(buf2);
         }
     }
 
@@ -5918,6 +5970,49 @@ int main_networkdetach(int argc, char **argv)
         return 1;
     }
     libxl_device_nic_dispose(&nic);
+    return 0;
+}
+
+int main_channellist(int argc, char **argv)
+{
+    int opt;
+    libxl_device_channel *channels;
+    libxl_channelinfo channelinfo;
+    int nb, i;
+
+    SWITCH_FOREACH_OPT(opt, "", NULL, "channel-list", 1) {
+        /* No options */
+    }
+
+    /*      Idx  BE   MAC   Hdl  Sta  evch txr/rxr  BE-path */
+    printf("%-3s %-2s %-5s %-6s %8s %-10s %-30s\n",
+           "Idx", "BE", "state", "evt-ch", "ring-ref", "kind", "");
+    for (argv += optind, argc -= optind; argc > 0; --argc, ++argv) {
+        uint32_t domid = find_domain(*argv);
+        channels = libxl_device_channel_list(ctx, domid, &nb);
+        if (!channels) {
+            continue;
+        }
+        for (i = 0; i < nb; ++i) {
+            if (!libxl_device_channel_getinfo(ctx, domid, &channels[i], &channelinfo)) {
+                printf("%-3d %-2d ", channels[i].devid, channelinfo.backend_id);
+                printf("%-5d ", channelinfo.state);
+                printf("%-6d %-8d ", channelinfo.evtch, channelinfo.rref);
+                printf("%-10s ", libxl_channel_kind_to_string(channels[i].kind));
+                switch (channels[i].kind) {
+                    case LIBXL_CHANNEL_KIND_PTY:
+                        printf("%-30s ", channelinfo.u.pty.path);
+                        break;
+                    default:
+                        break;
+                }
+                printf("\n");
+                libxl_channelinfo_dispose(&channelinfo);
+            }
+            libxl_device_channel_dispose(&channels[i]);
+        }
+        free(channels);
+    }
     return 0;
 }
 
