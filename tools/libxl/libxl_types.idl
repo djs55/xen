@@ -51,6 +51,14 @@ libxl_domain_type = Enumeration("domain_type", [
     (2, "PV"),
     ], init_val = -1)
 
+libxl_channel_kind = Enumeration("channel_kind", [
+    (0, "UNKNOWN"),
+    # Connect to a pty in the backend domain:
+    (1, "PTY"),
+    # Listen on a Unix domain socket in the backend domain:
+    (2, "SOCKET"),
+    ])
+
 libxl_device_model_version = Enumeration("device_model_version", [
     (0, "UNKNOWN"),
     (1, "QEMU_XEN_TRADITIONAL"), # Historical qemu-xen device model (qemu-dm)
@@ -243,6 +251,22 @@ libxl_cpupoolinfo = Struct("cpupoolinfo", [
     ("sched",       libxl_scheduler),
     ("n_dom",       uint32),
     ("cpumap",      libxl_bitmap)
+    ], dir=DIR_OUT)
+
+libxl_channelinfo = Struct("channelinfo", [
+    ("backend", string),
+    ("backend_id", uint32),
+    ("frontend", string),
+    ("frontend_id", uint32),
+    ("devid", libxl_devid),
+    ("state", integer),
+    ("evtch", integer),
+    ("rref", integer),
+    ("u", KeyedUnion(None, libxl_channel_kind, "kind",
+           [("unknown", None),
+            ("pty", Struct(None, [("path", string),])),
+            ("socket", None),
+           ])),
     ], dir=DIR_OUT)
 
 libxl_vminfo = Struct("vminfo", [
@@ -457,6 +481,18 @@ libxl_device_vtpm = Struct("device_vtpm", [
     ("uuid",             libxl_uuid),
 ])
 
+libxl_device_channel = Struct("device_channel", [
+    ("backend_domid", libxl_domid),
+    ("backend_domname", string),
+    ("devid", libxl_devid),
+    ("name", string),
+    ("u", KeyedUnion(None, libxl_channel_kind, "kind",
+           [("unknown", None),
+            ("pty", None),
+            ("socket", Struct(None, [("path", string)])),
+           ])),
+])
+
 libxl_domain_config = Struct("domain_config", [
     ("c_info", libxl_domain_create_info),
     ("b_info", libxl_domain_build_info),
@@ -467,6 +503,7 @@ libxl_domain_config = Struct("domain_config", [
     ("vfbs", Array(libxl_device_vfb, "num_vfbs")),
     ("vkbs", Array(libxl_device_vkb, "num_vkbs")),
     ("vtpms", Array(libxl_device_vtpm, "num_vtpms")),
+    ("channels", Array(libxl_device_channel, "num_channels")),
 
     ("on_poweroff", libxl_action_on_shutdown),
     ("on_reboot", libxl_action_on_shutdown),

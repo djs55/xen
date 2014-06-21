@@ -32,6 +32,10 @@ libxl__device_console = Struct("device_console", [
     ("devid", integer),
     ("consback", libxl__console_backend),
     ("output", string),
+    # These are specific to the 'channels', built on top of consoles:
+    ("name", string),
+    ("kind", string),
+    ("path", string),
     ])
 
 libxl__device_action = Enumeration("device_action", [
