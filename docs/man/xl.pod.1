@@ -1198,22 +1198,6 @@ List virtual network interfaces for a domain.
 
 =over 4
 
-=item B<channel-attach> I<domain-id> I<channel-device>
-
-Creates a new channel device in the domain specified by I<domain-id>, where
-a channel is a private low-bandwidth communication channel useful for
-guest agents and other control software.
-I<channel-device> describes the device to attach, using the same format as the
-B<channel> string in the domain config file. See L<xl.cfg> and
-L<http://xenbits.xen.org/docs/unstable/misc/channels.html>
-for more informations.
-
-=item B<channel-detach> I<domain-id> I<devid>
-
-Removes the channel device from the domain specified by I<domain-id>.
-I<devid> is the virtual interface device number within the domain
-visible in B<channel-list>.
-
 =item B<channel-list> I<domain-id>
 
 List virtual channel interfaces for a domain.

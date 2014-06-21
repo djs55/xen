@@ -2234,11 +2234,6 @@ _hidden void libxl__device_nic_add(libxl__egc *egc, uint32_t domid,
                                    libxl_device_nic *nic,
                                    libxl__ao_device *aodev);
 
-/* Internal function to connect a channel device */
-_hidden void libxl__device_channel_add(libxl__egc *egc, uint32_t domid,
-                                       libxl_device_channel *channel,
-                                       libxl__ao_device *aodev);
-
 _hidden void libxl__device_vtpm_add(libxl__egc *egc, uint32_t domid,
                                    libxl_device_vtpm *vtpm,
                                    libxl__ao_device *aodev);

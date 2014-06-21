@@ -3322,60 +3322,6 @@ int libxl__init_console_from_channel(libxl__gc *gc,
     return 0;
 }
 
-void libxl__device_channel_add(libxl__egc *egc, uint32_t domid,
-                               libxl_device_channel *channel,
-                               libxl__ao_device *aodev)
-{
-    STATE_AO_GC(aodev->ao);
-    libxl__device_console console;
-    libxl__device *device;
-    int rc = 0;
-    int devid = channel->devid;
-
-    if (devid == -1) {
-        if ((devid = libxl__device_nextid(gc, domid, "console")) < 0) {
-            rc = ERROR_FAIL;
-            goto out;
-        }
-
-        /* 0th device is reserved as a regular console */
-        if (devid == 0)
-            devid = 1;
-    }
-
-    rc = libxl__init_console_from_channel(gc, &console, devid, channel);
-    if (rc)
-        goto out;
-
-    GCNEW(device);
-    rc = libxl__device_console_add(gc, domid, &console, NULL, device);
-    if (rc)
-        goto out;
-
-    aodev->dev = device;
-    aodev->action = LIBXL__DEVICE_ACTION_ADD;
-    libxl__wait_device_connection(egc, aodev);
-out:
-    libxl__device_console_dispose(&console);
-    aodev->rc = rc;
-    if (rc) aodev->callback(egc, aodev);
-    return;
-}
-
-static int libxl__device_from_channel(libxl__gc *gc, uint32_t domid,
-                                      libxl_device_channel *channel,
-                                      libxl__device *device)
-{
-    device->backend_devid    = channel->devid;
-    device->backend_domid    = channel->backend_domid;
-    device->backend_kind     = LIBXL__DEVICE_KIND_CONSOLE;
-    device->devid            = channel->devid + 1; /* 0 is reserved */
-    device->domid            = domid;
-    device->kind             = LIBXL__DEVICE_KIND_CONSOLE;
-
-    return 0;
-}
-
 static int libxl__device_channel_from_xs_be(libxl__gc *gc,
                                             const char *be_path,
                                             libxl_device_channel *channel)
@@ -3761,8 +3707,6 @@ out:
  * libxl_device_disk_destroy
  * libxl_device_nic_remove
  * libxl_device_nic_destroy
- * libxl_device_channel_remove
- * libxl_device_channel_destroy
  * libxl_device_vtpm_remove
  * libxl_device_vtpm_destroy
  * libxl_device_vkb_remove
@@ -3807,10 +3751,6 @@ DEFINE_DEVICE_REMOVE(disk, destroy, 1)
 DEFINE_DEVICE_REMOVE(nic, remove, 0)
 DEFINE_DEVICE_REMOVE(nic, destroy, 1)
 
-/* channel */
-DEFINE_DEVICE_REMOVE(channel, remove, 0)
-DEFINE_DEVICE_REMOVE(channel, destroy, 1)
-
 /* vkb */
 DEFINE_DEVICE_REMOVE(vkb, remove, 0)
 DEFINE_DEVICE_REMOVE(vkb, destroy, 1)
@@ -3832,7 +3772,6 @@ DEFINE_DEVICE_REMOVE(vtpm, destroy, 1)
 /* The following functions are defined:
  * libxl_device_disk_add
  * libxl_device_nic_add
- * libxl_device_channel_add
  * libxl_device_vtpm_add
  */
 
@@ -3860,9 +3799,6 @@ DEFINE_DEVICE_ADD(disk)
 /* nic */
 DEFINE_DEVICE_ADD(nic)
 
-/* channel */
-DEFINE_DEVICE_ADD(channel)
-
 /* vtpm */
 DEFINE_DEVICE_ADD(vtpm)
 
@@ -3887,7 +3823,7 @@ typedef struct libxl__ddomain_device {
  */
 typedef struct libxl__ddomain_guest {
     uint32_t domid;
-    int num_vifs, num_vbds, num_qdisks, num_consoles;
+    int num_vifs, num_vbds, num_qdisks;
     LIBXL_SLIST_HEAD(, struct libxl__ddomain_device) devices;
     LIBXL_SLIST_ENTRY(struct libxl__ddomain_guest) next;
 } libxl__ddomain_guest;
@@ -3992,7 +3928,7 @@ static int add_device(libxl__egc *egc, libxl__ao *ao,
 
         break;
     case LIBXL__DEVICE_KIND_QDISK:
-        if ((dguest->num_qdisks == 0) && (dguest->num_consoles == 0)) {
+        if (dguest->num_qdisks == 0) {
             GCNEW(dmss);
             dmss->guest_domid = dev->domid;
             dmss->spawn.ao = ao;
@@ -4001,18 +3937,6 @@ static int add_device(libxl__egc *egc, libxl__ao *ao,
             libxl__spawn_qdisk_backend(egc, dmss);
         }
         dguest->num_qdisks++;
-
-        break;
-    case LIBXL__DEVICE_KIND_CONSOLE:
-        if ((dguest->num_qdisks == 0) && (dguest->num_consoles == 0)) {
-            GCNEW(dmss);
-            dmss->guest_domid = dev->domid;
-            dmss->spawn.ao = ao;
-            dmss->callback = qdisk_spawn_outcome;
-
-            libxl__spawn_qdisk_backend(egc, dmss);
-        }
-        dguest->num_consoles++;
 
         break;
     default:
