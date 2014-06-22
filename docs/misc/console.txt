@@ -31,16 +31,16 @@ The file "channels.txt" describes the intended use-cases of channels in more
 detail.
 
 The desired output of a PV console, is specified by the toolstack in the
-xenstore backend nodes "kind" and "path".
+xenstore backend nodes "connection" and "path".
 
 If the toolstack wants the console to be connected to a pty, it will write:
 
-kind = pty
+connection = pty
 
 If the toolstack wants a listening Unix domain socket to be created at path
 <path>, a connection accepted and data proxied to the console, it will write:
 
-kind = socket
+connection = socket
 path = <path>
 
 The backend implementation daemon chosen for a particular console is specified
@@ -59,11 +59,11 @@ implementation daemon. Currently used values are:
 
 # xenstore-read /local/domain/26/device/console/1/output
 pty
-  -- if "kind" is set to "pty"
+  -- if "connection" is set to "pty"
 
 # xenstore-read /local/domain/26/device/console/2/output
 chardev:libxl-channel%d
-  -- if "kind" is set to "socket". The chardev "libxl-channel%d" will be
+  -- if "connection" is set to "socket". The chardev "libxl-channel%d" will be
      configured via the qemu command-line.
 
 If the output is a pty, backends write the device name to the "tty" node

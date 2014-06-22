@@ -9,8 +9,9 @@ link. Typical uses of channels are
   2. to signal/query an in-guest agent
      (example use: oVirt's guest agent)
 
-Channels are similar to virtio-serial devices, and are intended to be
-used in the implementation of libvirt <channel>s when running on Xen.
+Channels are similar to virtio-serial devices and emulated serial links.
+Channels are intended to be used in the implementation of libvirt <channel>s
+when running on Xen.
 
 Note: if an application requires a high-bandwidth link then it should use
 vchan instead.
@@ -40,7 +41,7 @@ the sequence of events would be:
   3. Domain configuration is created for the VM, listing the channel
      name expected by the in-guest agent. In xl syntax this would be:
 
-     channel = [ "kind=socket, name=org.my.cloud.software.agent.version1,
+     channel = [ "connection=socket, name=org.my.cloud.software.agent.version1,
                   path = /my/cloud/software/talk/to/domain/<vm uuid>" ]
 
   4. The VM is started
@@ -72,24 +73,12 @@ include parts unique to the application, such as a domain names. To assist
 prevent clashes we recommend authors add their names to our global channel
 registry, in the file channel-registry.txt.
 
-Implementation notes
---------------------
-
-The current implementation of channels re-uses the PV console mechanism, where
-a channel is a "console with a name".
+Limitations
+-----------
 
 The implementation currently always uses qemu as the daemon in the backend.
 This is due to a limitation in xenconsoled: it is not currently capable of
 managing multiple consoles per domain.
-
-If the channel has "kind = pty" then the "output" node in xenstore will be
-set to "pty".
-
-If the channel has "kind = socket" then the "output" node in xenstore will
-be set to "chardev:libxl-channel%d". This tells the qemu console backend to
-proxy data between the console ring and the character device with id
-"libxl-channel%d". These character devices are currently defined on the
-qemu command-line via "-chardev" options.
 
 Hotplug and unplug of channels is not currently implemented. There are 2
 implementation possibilities:
@@ -97,3 +86,18 @@ implementation possibilities:
 1.  add support for dynamically creating and destroying qemu chardevs via
     qmp messages
 2.  add support in xenconsoled for managing multiple consoles
+
+
+XXX TODO Put in a commit comment:
+
+The current implementation of channels re-uses the PV console mechanism, where
+a channel is a "console with a name".
+
+If the channel has "connection = pty" then the "output" node in xenstore will be
+set to "pty".
+
+If the channel has "connection = socket" then the "output" node in xenstore will
+be set to "chardev:libxl-channel%d". This tells the qemu console backend to
+proxy data between the console ring and the character device with id
+"libxl-channel%d". These character devices are currently defined on the
+qemu command-line via "-chardev" options.

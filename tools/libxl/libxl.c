@@ -69,7 +69,7 @@ int libxl_ctx_alloc(libxl_ctx **pctx, int version,
 
     ctx->childproc_hooks = &libxl__childproc_default_hooks;
     ctx->childproc_user = 0;
-        
+
     ctx->sigchld_selfpipe[0] = -1;
     libxl__ev_fd_init(&ctx->sigchld_selfpipe_efd);
 
@@ -1089,7 +1089,7 @@ int libxl_evenable_domain_death(libxl_ctx *ctx, uint32_t domid,
     GC_INIT(ctx);
     libxl_evgen_domain_death *evg, *evg_search;
     int rc;
-    
+
     CTX_LOCK;
 
     evg = malloc(sizeof(*evg));  if (!evg) { rc = ERROR_NOMEM; goto out; }
@@ -1161,7 +1161,7 @@ static void disk_eject_xswatch_callback(libxl__egc *egc, libxl__ev_xswatch *w,
 
     libxl_event *ev = NEW_EVENT(egc, DISK_EJECT, evg->domid, evg->user);
     libxl_device_disk *disk = &ev->u.disk_eject.disk;
-    
+
     backend = libxl__xs_read(gc, XBT_NULL,
                              libxl__sprintf(gc, "%.*s/backend",
                                             (int)strlen(wpath)-6, wpath));
@@ -1253,7 +1253,7 @@ void libxl_evdisable_disk_eject(libxl_ctx *ctx, libxl_evgen_disk_eject *evg) {
     GC_INIT(ctx);
     libxl__evdisable_disk_eject(gc, evg);
     GC_FREE;
-}    
+}
 
 /* Callbacks for libxl_domain_destroy */
 
@@ -1462,7 +1462,7 @@ static void devices_destroy_cb(libxl__egc *egc,
     }
 
     if (rc < 0)
-        LIBXL__LOG(ctx, LIBXL__LOG_ERROR, 
+        LIBXL__LOG(ctx, LIBXL__LOG_ERROR,
                    "libxl__devices_destroy failed for %d", domid);
 
     vm_path = libxl__xs_read(gc, XBT_NULL, libxl__sprintf(gc, "%s/vm", dom_path));
@@ -3223,9 +3223,9 @@ int libxl__device_console_add(libxl__gc *gc, uint32_t domid,
         flexarray_append(ro_front, "name");
         flexarray_append(ro_front, console->name);
     }
-    if (console->kind) {
-        flexarray_append(back, "kind");
-        flexarray_append(back, console->kind);
+    if (console->connection) {
+        flexarray_append(back, "connection");
+        flexarray_append(back, console->connection);
     }
     if (console->path) {
         flexarray_append(back, "path");
@@ -3293,17 +3293,18 @@ int libxl__init_console_from_channel(libxl__gc *gc,
 
     console->backend_domid = channel->backend_domid;
 
-    switch (channel->kind) {
-        case LIBXL_CHANNEL_KIND_UNKNOWN:
+    switch (channel->connection) {
+        case LIBXL_CHANNEL_CONNECTION_UNKNOWN:
             LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
-                       "channel %d has no kind", channel->devid);
+                       "channel %d has no defined connection; "
+                       "to where should it be connected?", channel->devid);
             return ERROR_INVAL;
-        case LIBXL_CHANNEL_KIND_PTY:
-            console->kind = libxl__strdup(NOGC, "pty");
+        case LIBXL_CHANNEL_CONNECTION_PTY:
+            console->connection = libxl__strdup(NOGC, "pty");
             console->output = libxl__sprintf(NOGC, "pty");
             break;
-        case LIBXL_CHANNEL_KIND_SOCKET:
-            console->kind = libxl__strdup(NOGC, "socket");
+        case LIBXL_CHANNEL_CONNECTION_SOCKET:
+            console->connection = libxl__strdup(NOGC, "socket");
             if (!channel->u.socket.path) {
                 LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
                            "channel %d has no path", channel->devid);
@@ -3315,7 +3316,8 @@ int libxl__init_console_from_channel(libxl__gc *gc,
             break;
         default:
             /* We've forgotten to add the clause */
-            LOG(ERROR, "%s: unknown channel kind %d", __func__, channel->kind);
+            LOG(ERROR, "%s: missing implementation for channel connection %d",
+                __func__, channel->connection);
             return ERROR_INVAL;
     }
 
@@ -3333,11 +3335,11 @@ static int libxl__device_channel_from_xs_be(libxl__gc *gc,
 
     /* READ_BACKEND is from libxl__device_nic_from_xs_be above */
     channel->name = READ_BACKEND(NOGC, "name");
-    tmp = READ_BACKEND(gc, "kind");
+    tmp = READ_BACKEND(gc, "connection");
     if (!strcmp(tmp, "pty")) {
-        channel->kind = LIBXL_CHANNEL_KIND_PTY;
+        channel->connection = LIBXL_CHANNEL_CONNECTION_PTY;
     } else if (!strcmp(tmp, "socket")) {
-        channel->kind = LIBXL_CHANNEL_KIND_SOCKET;
+        channel->connection = LIBXL_CHANNEL_CONNECTION_SOCKET;
         channel->u.socket.path = READ_BACKEND(NOGC, "path");
     } else {
 	rc = ERROR_INVAL;
@@ -3457,9 +3459,9 @@ int libxl_device_channel_getinfo(libxl_ctx *ctx, uint32_t domid,
     val = libxl__xs_read(gc, XBT_NULL, GCSPRINTF("%s/port", fe_path));
     channelinfo->evtch = val ? strtoul(val, NULL, 10) : -1;
 
-    channelinfo->kind = channel->kind;
-    switch (channel->kind) {
-         case LIBXL_CHANNEL_KIND_PTY:
+    channelinfo->connection = channel->connection;
+    switch (channel->connection) {
+         case LIBXL_CHANNEL_CONNECTION_PTY:
              val = libxl__xs_read(gc, XBT_NULL, GCSPRINTF("%s/tty", fe_path));
              channelinfo->u.pty.path = strdup(val);
              break;

@@ -1315,17 +1315,19 @@ static void parse_config_data(const char *config_source,
                 } else if (!strcmp(p, "name")) {
                     free(chn->name);
                     chn->name = strdup(p2 + 1);
-                } else if (!strcmp(p, "kind")) {
-                    if (chn->kind != LIBXL_CHANNEL_KIND_UNKNOWN) {
-                        fprintf(stderr, "a channel may have only one kind\n");
+                } else if (!strcmp(p, "connection")) {
+                    if (chn->connection != LIBXL_CHANNEL_CONNECTION_UNKNOWN) {
+                        fprintf(stderr, "a channel may have only one "
+                                "connection\n");
                         exit(1);
                     }
                     if (!strcmp(p2 + 1, "pty")) {
-                        chn->kind = LIBXL_CHANNEL_KIND_PTY;
+                        chn->connection = LIBXL_CHANNEL_CONNECTION_PTY;
                     } else if (!strcmp(p2 + 1, "socket")) {
-                        chn->kind = LIBXL_CHANNEL_KIND_SOCKET;
+                        chn->connection = LIBXL_CHANNEL_CONNECTION_SOCKET;
                     } else {
-                        fprintf(stderr, "unknown channel kind '%s'\n", p2 + 1);
+                        fprintf(stderr, "unknown channel connection '%s'\n",
+                                p2 + 1);
                         exit(1);
                     }
                 } else if (!strcmp(p, "path")) {
@@ -1763,7 +1765,7 @@ skip_vfb:
         if (!xlu_cfg_get_long (config, "spiceusbredirection", &l, 0))
             b_info->u.hvm.spice.usbredirection = l;
         xlu_cfg_get_defbool(config, "nographic", &b_info->u.hvm.nographic, 0);
-        xlu_cfg_get_defbool(config, "gfx_passthru", 
+        xlu_cfg_get_defbool(config, "gfx_passthru",
                             &b_info->u.hvm.gfx_passthru, 0);
         xlu_cfg_replace_string (config, "serial", &b_info->u.hvm.serial, 0);
         xlu_cfg_replace_string (config, "boot", &b_info->u.hvm.boot, 0);
@@ -5316,7 +5318,7 @@ static int sched_domain_output(libxl_scheduler sched, int (*output)(int),
     return 0;
 }
 
-/* 
+/*
  * <nothing>             : List all domain params and sched params from all pools
  * -d [domid]            : List domain params for domain
  * -d [domid] [params]   : Set domain params for domain
@@ -5984,9 +5986,9 @@ int main_channellist(int argc, char **argv)
         /* No options */
     }
 
-    /*      Idx  BE   MAC   Hdl  Sta  evch txr/rxr  BE-path */
+    /*      Idx BE state evt-ch ring-ref connection params*/
     printf("%-3s %-2s %-5s %-6s %8s %-10s %-30s\n",
-           "Idx", "BE", "state", "evt-ch", "ring-ref", "kind", "");
+           "Idx", "BE", "state", "evt-ch", "ring-ref", "connection", "");
     for (argv += optind, argc -= optind; argc > 0; --argc, ++argv) {
         uint32_t domid = find_domain(*argv);
         channels = libxl_device_channel_list(ctx, domid, &nb);
@@ -5994,13 +5996,15 @@ int main_channellist(int argc, char **argv)
             continue;
         }
         for (i = 0; i < nb; ++i) {
-            if (!libxl_device_channel_getinfo(ctx, domid, &channels[i], &channelinfo)) {
+            if (!libxl_device_channel_getinfo(ctx, domid, &channels[i],
+                &channelinfo)) {
                 printf("%-3d %-2d ", channels[i].devid, channelinfo.backend_id);
                 printf("%-5d ", channelinfo.state);
                 printf("%-6d %-8d ", channelinfo.evtch, channelinfo.rref);
-                printf("%-10s ", libxl_channel_kind_to_string(channels[i].kind));
-                switch (channels[i].kind) {
-                    case LIBXL_CHANNEL_KIND_PTY:
+                printf("%-10s ", libxl_channel_connection_to_string(
+                       channels[i].connection));
+                switch (channels[i].connection) {
+                    case LIBXL_CHANNEL_CONNECTION_PTY:
                         printf("%-30s ", channelinfo.u.pty.path);
                         break;
                     default:
@@ -6854,7 +6858,7 @@ int main_cpupoolcreate(int argc, char **argv)
     }
     /* We made it! */
     rc = 0;
-   
+
 out_cfg:
     xlu_cfg_destroy(config);
 out:

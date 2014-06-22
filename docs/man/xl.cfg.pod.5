@@ -208,7 +208,7 @@ Honoured by the sedf scheduler.
 
 =item B<slice=NANOSECONDS>
 
-The normal EDF scheduling usage in nanoseconds. it defines the time 
+The normal EDF scheduling usage in nanoseconds. it defines the time
 a domain get every period time.
 Honoured by the sedf scheduler.
 
@@ -498,20 +498,20 @@ of channel names, so application authors are encouraged to make their
 names unique by including domain name and version number in the string
 (e.g. org.mydomain.guestagent.1).
 
-=item C<kind=KIND>
+=item C<connection=CONNECTION>
 
 Specify how the backend will be implemented. This following options are
 available:
 
 =over 4
 
-=item B<kind=SOCKET>:
+=item B<connection=SOCKET>:
 
 The backend will bind a Unix domain socket (at the path given by
 B<path=PATH>), call listen and accept connections. The backend will proxy
 data between the channel and the connected socket.
 
-=item B<kind=PTY>:
+=item B<connection=PTY>:
 
 The backend will create a pty and proxy data between the channel and the
 master device. The command B<xl channel-list> can be used to discover the
@@ -987,7 +987,7 @@ number of vendor defined SMBIOS structures (type 128 - 255). Since SMBIOS
 structures do not present their overall size, each entry in the file must be
 preceded by a 32b integer indicating the size of the next structure.
 
-=back 
+=back
 
 =head3 Guest Virtual Time Controls
 
@@ -1470,4 +1470,3 @@ documentation. Patches to improve incomplete items (or any other item)
 are gratefully received on the xen-devel@lists.xen.org mailing
 list. Please see L<http://wiki.xen.org/wiki/SubmittingXenPatches> for
 information on how to submit a patch to Xen.
-

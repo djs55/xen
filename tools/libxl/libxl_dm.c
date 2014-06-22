@@ -394,7 +394,7 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
     const libxl_sdl_info *sdl = dm_sdl(guest_config);
     const char *keymap = dm_keymap(guest_config);
     flexarray_t *dm_args;
-    int i, kind, devid;
+    int i, connection, devid;
     uint64_t ram_size;
     const char *path, *chardev;
 
@@ -414,20 +414,21 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
     flexarray_append(dm_args, "chardev=libxl-cmd,mode=control");
 
     for (i = 0; i < guest_config->num_channels; i++) {
-        kind = guest_config->channels[i].kind;
+        connection = guest_config->channels[i].connection;
         devid = guest_config->channels[i].devid;
-        switch (kind) {
-            case LIBXL_CHANNEL_KIND_PTY:
+        switch (connection) {
+            case LIBXL_CHANNEL_CONNECTION_PTY:
                 chardev = GCSPRINTF("pty,id=libxl-channel%d", devid);
                 break;
-            case LIBXL_CHANNEL_KIND_SOCKET:
+            case LIBXL_CHANNEL_CONNECTION_SOCKET:
                 path = guest_config->channels[i].u.socket.path;
                 chardev = GCSPRINTF("socket,id=libxl-channel%d,path=%s,"
                                     "server,nowait", devid, path);
                 break;
             default:
                 /* We've forgotten to add the clause */
-                LOG(ERROR, "%s: unknown channel kind %d", __func__, kind);
+                LOG(ERROR, "%s: unknown channel connection %d",
+                    __func__, connection);
                 return NULL;
         }
         flexarray_append(dm_args, "-chardev");
@@ -1586,7 +1587,7 @@ int libxl__need_xenpv_qemu(libxl__gc *gc,
         ret = libxl__get_domid(gc, &domid);
         if (ret) goto out;
         for (i = 0; i < nr_channels; i++) {
-            if (channels[i].kind == LIBXL_CHANNEL_KIND_SOCKET &&
+            if (channels[i].connection == LIBXL_CHANNEL_CONNECTION_SOCKET &&
                 channels[i].backend_domid == domid) {
                 ret = 1;
                 goto out;

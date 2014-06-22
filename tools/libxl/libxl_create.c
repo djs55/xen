@@ -363,7 +363,7 @@ static int init_console_info(libxl__gc *gc,
     console->devid = dev_num;
     console->consback = LIBXL__CONSOLE_BACKEND_XENCONSOLED;
     console->output = libxl__strdup(NOGC, "pty");
-    /* console->{name,kind,path} are NULL on normal consoles.
+    /* console->{name,connection,path} are NULL on normal consoles.
        Only 'channels' when mapped to consoles have a string name. */
     return 0;
 }
@@ -1400,7 +1400,7 @@ static void domain_create_cb(libxl__egc *egc,
 
     libxl__ao_complete(egc, ao, rc);
 }
-    
+
 int libxl_domain_create_new(libxl_ctx *ctx, libxl_domain_config *d_config,
                             uint32_t *domid,
                             const libxl_asyncop_how *ao_how,

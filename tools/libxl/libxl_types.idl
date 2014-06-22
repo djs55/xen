@@ -51,12 +51,10 @@ libxl_domain_type = Enumeration("domain_type", [
     (2, "PV"),
     ], init_val = -1)
 
-libxl_channel_kind = Enumeration("channel_kind", [
+libxl_channel_connection = Enumeration("channel_connection", [
     (0, "UNKNOWN"),
-    # Connect to a pty in the backend domain:
     (1, "PTY"),
-    # Listen on a Unix domain socket in the backend domain:
-    (2, "SOCKET"),
+    (2, "SOCKET"), # a listening Unix domain socket
     ])
 
 libxl_device_model_version = Enumeration("device_model_version", [
@@ -262,7 +260,7 @@ libxl_channelinfo = Struct("channelinfo", [
     ("state", integer),
     ("evtch", integer),
     ("rref", integer),
-    ("u", KeyedUnion(None, libxl_channel_kind, "kind",
+    ("u", KeyedUnion(None, libxl_channel_connection, "connection",
            [("unknown", None),
             ("pty", Struct(None, [("path", string),])),
             ("socket", None),
@@ -337,7 +335,7 @@ libxl_domain_build_info = Struct("domain_build_info",[
     ("disable_migrate", libxl_defbool),
     ("cpuid",           libxl_cpuid_policy_list),
     ("blkdev_start",    string),
-    
+
     ("device_model_version", libxl_device_model_version),
     ("device_model_stubdomain", libxl_defbool),
     # if you set device_model you must set device_model_version too
@@ -382,9 +380,9 @@ libxl_domain_build_info = Struct("domain_build_info",[
                                        ("keymap",           string),
                                        ("sdl",              libxl_sdl_info),
                                        ("spice",            libxl_spice_info),
-                                       
+
                                        ("gfx_passthru",     libxl_defbool),
-                                       
+
                                        ("serial",           string),
                                        ("boot",             string),
                                        ("usb",              libxl_defbool),
@@ -486,7 +484,7 @@ libxl_device_channel = Struct("device_channel", [
     ("backend_domname", string),
     ("devid", libxl_devid),
     ("name", string),
-    ("u", KeyedUnion(None, libxl_channel_kind, "kind",
+    ("u", KeyedUnion(None, libxl_channel_connection, "connection",
            [("unknown", None),
             ("pty", None),
             ("socket", Struct(None, [("path", string)])),
