@@ -1587,8 +1587,10 @@ int libxl__need_xenpv_qemu(libxl__gc *gc,
         ret = libxl__get_domid(gc, &domid);
         if (ret) goto out;
         for (i = 0; i < nr_channels; i++) {
-            if (channels[i].connection == LIBXL_CHANNEL_CONNECTION_SOCKET &&
-                channels[i].backend_domid == domid) {
+            if (channels[i].backend_domid == domid) {
+                /* xenconsoled is limited to the first console only.
+                   Until this restriction is removed we must use qemu for
+                   secondary consoles which includes all channels. */
                 ret = 1;
                 goto out;
             }
