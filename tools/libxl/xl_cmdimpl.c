@@ -333,6 +333,18 @@ static void *xrealloc(void *ptr, size_t sz) {
     return r;
 }
 
+static char *xstrdup(const char *x)
+{
+    char *r;
+    r = strdup(x);
+    if (!r) {
+        fprintf(stderr, "xl: Unable to strdup a string of length %zu.\n",
+                strlen(x));
+        exit(-ERROR_FAIL);
+    }
+    return r;
+}
+
 #define ARRAY_EXTEND_INIT(array,count,initfn)                           \
     ({                                                                  \
         typeof((count)) array_extend_old_count = (count);               \
@@ -341,6 +353,12 @@ static void *xrealloc(void *ptr, size_t sz) {
         (initfn)(&(array)[array_extend_old_count]);                     \
         (array)[array_extend_old_count].devid = array_extend_old_count; \
         &(array)[array_extend_old_count];                               \
+    })
+
+#define REPLACE_STRING(dest, src)                                       \
+    ({                                                                  \
+        free(dest);                                                     \
+        dest = xstrdup(src);                                            \
     })
 
 #define LOG(_f, _a...)   dolog(__FILE__, __LINE__, __func__, _f "\n", ##_a)
@@ -551,7 +569,7 @@ static void split_string_into_string_list(const char *str,
 
     s = strdup(str);
     if (s == NULL) {
-        fprintf(stderr, "unable to allocate memory to parse bootloader args\n");
+        fprintf(stderr, "unable to allocate memory to split string\n");
         exit(-1);
     }
 
@@ -567,7 +585,7 @@ static void split_string_into_string_list(const char *str,
 
     sl = malloc((nr+1) * sizeof (char *));
     if (sl == NULL) {
-        fprintf(stderr, "unable to allocate memory for bootloader args\n");
+        fprintf(stderr, "unable to allocate memory to split string\n");
         exit(-1);
     }
 
@@ -582,6 +600,64 @@ static void split_string_into_string_list(const char *str,
     *psl = sl;
 
     free(s);
+}
+
+typedef int (*char_predicate_t)(const int c);
+
+static void trim(char_predicate_t predicate, const char *input, char **output)
+{
+    char *p, *q, *tmp;
+    if (*input == '\000')
+        return;
+    /* Input has length >= 1 */
+
+    p = tmp = xstrdup(input);
+    /* Skip past the first whitespace */
+    while ((*p != '\000') && (predicate(*p)))
+        p ++;
+    q = p + strlen(p) - 1;
+    /* q points to the last non-NULL character */
+    while ((q > p) && (predicate(*q)))
+        q --;
+    /* q points to the last character we want */
+    q ++;
+    *q = '\000';
+    *output = xstrdup(p);
+    free(tmp);
+}
+
+static int split_string_into_pair(const char *str,
+                                  const char *delim,
+                                  char **a,
+                                  char **b)
+{
+    char *s, *p, *saveptr, *aa, *bb;
+    int rc = 0;
+
+    s = xstrdup(str);
+
+    p = strtok_r(s, delim, &saveptr);
+    if (p == NULL) {
+        rc = ERROR_INVAL;
+        goto out;
+    }
+    aa = xstrdup(p);
+    p = strtok_r(NULL, delim, &saveptr);
+    if (p == NULL) {
+        rc = ERROR_INVAL;
+        goto out;
+    }
+    bb = xstrdup(p);
+
+    *a = aa;
+    aa = NULL;
+    *b = bb;
+    bb = NULL;
+out:
+    free(s);
+    free(aa);
+    free(bb);
+    return rc;
 }
 
 static int parse_range(const char *str, unsigned long *a, unsigned long *b)
@@ -1295,51 +1371,70 @@ static void parse_config_data(const char *config_source,
         while ((buf = xlu_cfg_get_listitem (channels,
                 d_config->num_channels)) != NULL) {
             libxl_device_channel *chn;
-            char *buf2 = strdup(buf);
-            char *p, *p2;
-            chn = ARRAY_EXTEND_INIT(d_config->channels, d_config->num_channels,
-                                    libxl_device_channel_init);
+            libxl_string_list pairs;
+            char *path = NULL;
+            int len;
 
-            p = strtok(buf2, ",");
-            if (!p)
-                goto skip_channel;
-            do {
-                while (*p == ' ')
-                    p++;
-                if ((p2 = strchr(p, '=')) == NULL)
-                    break;
-                *p2 = '\0';
-                if (!strcmp(p, "backend")) {
-                    free(chn->backend_domname);
-                    chn->backend_domname = strdup(p2 + 1);
-                } else if (!strcmp(p, "name")) {
-                    free(chn->name);
-                    chn->name = strdup(p2 + 1);
-                } else if (!strcmp(p, "connection")) {
-                    if (chn->connection != LIBXL_CHANNEL_CONNECTION_UNKNOWN) {
-                        fprintf(stderr, "a channel may have only one "
-                                "connection\n");
-                        exit(1);
-                    }
-                    if (!strcmp(p2 + 1, "pty")) {
+            chn = ARRAY_EXTEND_INIT(d_config->channels, d_config->num_channels,
+                                   libxl_device_channel_init);
+
+            split_string_into_string_list(buf, ",", &pairs);
+            len = libxl_string_list_length(&pairs);
+            for (i = 0; i < len; i++) {
+                char *key, *key_untrimmed, *value, *value_untrimmed;
+                int rc;
+                rc = split_string_into_pair(pairs[i], "=",
+                                            &key_untrimmed,
+                                            &value_untrimmed);
+                if (rc != 0) {
+                    fprintf(stderr, "failed to parse channel configuration: %s",
+                            pairs[i]);
+                    exit(1);
+                }
+                trim(isspace, key_untrimmed, &key);
+                trim(isspace, value_untrimmed, &value);
+
+                if (!strcmp(key, "backend")) {
+                    REPLACE_STRING(chn->backend_domname, value);
+                } else if (!strcmp(key, "name")) {
+                    REPLACE_STRING(chn->name, value);
+                } else if (!strcmp(key, "path")) {
+                    REPLACE_STRING(path, value);
+                } else if (!strcmp(key, "connection")) {
+                    if (!strcmp(value, "pty")) {
                         chn->connection = LIBXL_CHANNEL_CONNECTION_PTY;
-                    } else if (!strcmp(p2 + 1, "socket")) {
+                    } else if (!strcmp(value, "socket")) {
                         chn->connection = LIBXL_CHANNEL_CONNECTION_SOCKET;
                     } else {
                         fprintf(stderr, "unknown channel connection '%s'\n",
-                                p2 + 1);
+                                value);
                         exit(1);
                     }
-                } else if (!strcmp(p, "path")) {
-                    free(chn->u.socket.path);
-                    chn->u.socket.path = strdup(p2 + 1);
                 } else {
                     fprintf(stderr, "unknown channel parameter '%s',"
-                                    " ignoring\n", p);
+                                  " ignoring\n", key);
                 }
-            } while ((p = strtok(NULL, ",")) != NULL);
-skip_channel:
-            free(buf2);
+                free(key);
+                free(key_untrimmed);
+                free(value);
+                free(value_untrimmed);
+            }
+            switch (chn->connection){
+            case LIBXL_CHANNEL_CONNECTION_UNKNOWN:
+                fprintf(stderr, "channel has unknown 'connection'\n");
+                exit(1);
+            case LIBXL_CHANNEL_CONNECTION_SOCKET:
+                if (!path) {
+                    fprintf(stderr, "channel connection 'socket' requires path=..\n");
+                    exit(1);
+                }
+                chn->u.socket.path = xstrdup(path);
+                break;
+            default:
+                break;
+            }
+            libxl_string_list_dispose(&pairs);
+            free(path);
         }
     }
 
