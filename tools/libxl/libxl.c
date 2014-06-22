@@ -3293,6 +3293,14 @@ int libxl__init_console_from_channel(libxl__gc *gc,
 
     console->backend_domid = channel->backend_domid;
 
+    /* The xenstore 'output' node tells the backend what to connect the console
+       to. If the channel has "connection = pty" then the "output" node will be
+       set to "pty". If the channel has "connection = socket" then the "output"
+       node will be set to "chardev:libxl-channel%d". This tells the qemu
+       backend to proxy data between the console ring and the character device
+       with id "libxl-channel%d". These character devices are currently defined
+       on the qemu command-line via "-chardev" options in libxl_dm.c */
+
     switch (channel->connection) {
         case LIBXL_CHANNEL_CONNECTION_UNKNOWN:
             LIBXL__LOG(CTX, LIBXL__LOG_ERROR,

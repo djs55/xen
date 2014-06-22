@@ -1,5 +1,5 @@
 Xen PV Channels
-------------------------------------------------------------------------
+===============
 
 A channel is a low-bandwidth private byte stream similar to a serial
 link. Typical uses of channels are
@@ -21,18 +21,18 @@ How to use channels: an example
 
 Consider a cloud deployment where VMs are cloned from pre-made templates,
 and customised on first boot by an in-guest agent which sets the IP address,
-hostname, ssh keys etc. To set up the system the cloud administrator would
+hostname, ssh keys etc. To instal the system the cloud administrator would
 first:
 
   1. Install a guest as normal (no channel configuration necessary)
   2. Install the in-guest agent specific to the cloud software. This will
-     prepare the guest to communicate over the channel, and also probably
-     prepare the guest to be cloned safely (sometimes known as "sysprepping")
+     prepare the guest to communicate over the channel, and also prepare
+     the guest to be cloned safely (sometimes known as "sysprepping")
   3. Shutdown the guest
   4. Register the guest as a template with the cloud orchestration software
   5. Install the cloud orchestration agent in dom0
 
-When a cloud tenant requests that a VM is created from the template,
+At runtime, when a cloud tenant requests that a VM is created from the template,
 the sequence of events would be:
 
   1. A VM is "cloned" from the template
@@ -47,9 +47,8 @@ the sequence of events would be:
   4. The VM is started
   5. In dom0 the cloud orchestration agent connects to the Unix domain
      socket, writes a handshake message and waits for a reply
-  6. In the guest, a udev rule (or similar) which was installed with the
-     in-guest agent is activated by the hotplug event, and it starts the
-     in-guest agent.
+  6. In the guest, a udev rule (part of the guest agent package) is activated
+     by the hotplug event, and it starts the in-guest agent.
   7. The in-guest agent completes a handshake with the dom0 agent
   8. The dom0 agent transmits the unique VM configuration: hostname, IP
      address, ssh keys etc etc
@@ -71,14 +70,10 @@ Since channels are identified by names, application authors must ensure their
 channel names are unique to avoid clashes. We recommend that channel names
 include parts unique to the application, such as a domain names. To assist
 prevent clashes we recommend authors add their names to our global channel
-registry, in the file channel-registry.txt.
+registry, at the end of this document.
 
 Limitations
 -----------
-
-The implementation currently always uses qemu as the daemon in the backend.
-This is due to a limitation in xenconsoled: it is not currently capable of
-managing multiple consoles per domain.
 
 Hotplug and unplug of channels is not currently implemented. There are 2
 implementation possibilities:
@@ -87,17 +82,19 @@ implementation possibilities:
     qmp messages
 2.  add support in xenconsoled for managing multiple consoles
 
+Channel name registry
+---------------------
 
-XXX TODO Put in a commit comment:
+It is important that channel names are globally unique. To help ensure
+that no-one's name clashes with yours, please add yours to this list.
 
-The current implementation of channels re-uses the PV console mechanism, where
-a channel is a "console with a name".
+Key:
+N: Name
+C: Contact
+D: Short description of use, possibly including a URL to your software
+   or API
 
-If the channel has "connection = pty" then the "output" node in xenstore will be
-set to "pty".
-
-If the channel has "connection = socket" then the "output" node in xenstore will
-be set to "chardev:libxl-channel%d". This tells the qemu console backend to
-proxy data between the console ring and the character device with id
-"libxl-channel%d". These character devices are currently defined on the
-qemu command-line via "-chardev" options.
+N: org.xenproject.guest.clipboard.0.1
+C: David Scott <dave@recoil.org>
+D: Share clipboard data via an in-guest agent. See:
+   http://wiki.xenproject.org/wiki/Clipboard_sharing_protocol
