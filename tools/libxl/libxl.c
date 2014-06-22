@@ -3746,6 +3746,10 @@ DEFINE_DEVICE_REMOVE(vfb, destroy, 1)
 DEFINE_DEVICE_REMOVE(vtpm, remove, 0)
 DEFINE_DEVICE_REMOVE(vtpm, destroy, 1)
 
+/* channel/console hotunplug is not implemented. There are 2 possibilities:
+ * 1. add support for secondary consoles to xenconsoled
+ * 2. dynamically add/remove qemu chardevs via qmp messages. */
+
 #undef DEFINE_DEVICE_REMOVE
 
 /******************************************************************************/

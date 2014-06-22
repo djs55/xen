@@ -68,19 +68,14 @@ at them; make sure such software is disabled!
 
 Since channels are identified by names, application authors must ensure their
 channel names are unique to avoid clashes. We recommend that channel names
-include parts unique to the application, such as a domain names. To assist
+include parts unique to the application such as a domain names. To assist
 prevent clashes we recommend authors add their names to our global channel
-registry, at the end of this document.
+registry at the end of this document.
 
 Limitations
 -----------
 
-Hotplug and unplug of channels is not currently implemented. There are 2
-implementation possibilities:
-
-1.  add support for dynamically creating and destroying qemu chardevs via
-    qmp messages
-2.  add support in xenconsoled for managing multiple consoles
+Hotplug and unplug of channels is not currently implemented.
 
 Channel name registry
 ---------------------
@@ -95,6 +90,6 @@ D: Short description of use, possibly including a URL to your software
    or API
 
 N: org.xenproject.guest.clipboard.0.1
-C: David Scott <dave@recoil.org>
+C: David Scott <dave.scott@citrix.com>
 D: Share clipboard data via an in-guest agent. See:
    http://wiki.xenproject.org/wiki/Clipboard_sharing_protocol
