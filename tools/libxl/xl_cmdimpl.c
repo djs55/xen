@@ -298,6 +298,18 @@ static void *xrealloc(void *ptr, size_t sz) {
     return r;
 }
 
+static char *xstrdup(const char *x)
+{
+    char *r;
+    r = strdup(x);
+    if (!r) {
+        fprintf(stderr, "xl: Unable to strdup a string of length %zu.\n",
+                strlen(x));
+        exit(-ERROR_FAIL);
+    }
+    return r;
+}
+
 #define ARRAY_EXTEND_INIT(array,count,initfn)                           \
     ({                                                                  \
         typeof((count)) array_extend_old_count = (count);               \
@@ -516,7 +528,7 @@ static void split_string_into_string_list(const char *str,
 
     s = strdup(str);
     if (s == NULL) {
-        fprintf(stderr, "unable to allocate memory to parse bootloader args\n");
+        fprintf(stderr, "unable to allocate memory to split string\n");
         exit(-1);
     }
 
@@ -532,7 +544,7 @@ static void split_string_into_string_list(const char *str,
 
     sl = malloc((nr+1) * sizeof (char *));
     if (sl == NULL) {
-        fprintf(stderr, "unable to allocate memory for bootloader args\n");
+        fprintf(stderr, "unable to allocate memory to split string\n");
         exit(-1);
     }
 
@@ -547,6 +559,64 @@ static void split_string_into_string_list(const char *str,
     *psl = sl;
 
     free(s);
+}
+
+typedef int (*char_predicate_t)(const int c);
+
+static void trim(char_predicate_t predicate, const char *input, char **output)
+{
+    char *p, *q, *tmp;
+    if (*input == '\000')
+        return;
+    /* Input has length >= 1 */
+
+    p = tmp = xstrdup(input);
+    /* Skip past the first whitespace */
+    while ((*p != '\000') && (predicate(*p)))
+        p ++;
+    q = p + strlen(p) - 1;
+    /* q points to the last non-NULL character */
+    while ((q > p) && (predicate(*q)))
+        q --;
+    /* q points to the last character we want */
+    q ++;
+    *q = '\000';
+    *output = xstrdup(p);
+    free(tmp);
+}
+
+static int split_string_into_pair(const char *str,
+                                  const char *delim,
+                                  char **a,
+                                  char **b)
+{
+    char *s, *p, *saveptr, *aa = NULL, *bb = NULL;
+    int rc = 0;
+
+    s = xstrdup(str);
+
+    p = strtok_r(s, delim, &saveptr);
+    if (p == NULL) {
+        rc = ERROR_INVAL;
+        goto out;
+    }
+    aa = xstrdup(p);
+    p = strtok_r(NULL, delim, &saveptr);
+    if (p == NULL) {
+        rc = ERROR_INVAL;
+        goto out;
+    }
+    bb = xstrdup(p);
+
+    *a = aa;
+    aa = NULL;
+    *b = bb;
+    bb = NULL;
+out:
+    free(s);
+    free(aa);
+    free(bb);
+    return rc;
 }
 
 static int parse_range(const char *str, unsigned long *a, unsigned long *b)
@@ -797,6 +867,12 @@ static void parse_vcpu_affinity(libxl_domain_build_info *b_info,
     }
 }
 
+static void replace_string(char **str, const char *val)
+{
+    free(*str);
+    *str = strdup(val);
+}
+
 static void parse_config_data(const char *config_source,
                               const char *config_data,
                               int config_len,
@@ -806,7 +882,7 @@ static void parse_config_data(const char *config_source,
     long l;
     XLU_Config *config;
     XLU_ConfigList *cpus, *vbds, *nics, *pcis, *cvfbs, *cpuids, *vtpms;
-    XLU_ConfigList *ioports, *irqs, *iomem;
+    XLU_ConfigList *channels, *ioports, *irqs, *iomem;
     int num_ioports, num_irqs, num_iomem, num_cpus;
     int pci_power_mgmt = 0;
     int pci_msitranslate = 0;
@@ -1285,6 +1361,79 @@ static void parse_config_data(const char *config_source,
             }
             free(buf2);
             d_config->num_vtpms++;
+        }
+    }
+
+    if (!xlu_cfg_get_list (config, "channel", &channels, 0, 0)) {
+        d_config->num_channels = 0;
+        d_config->channels = NULL;
+        while ((buf = xlu_cfg_get_listitem (channels,
+                d_config->num_channels)) != NULL) {
+            libxl_device_channel *chn;
+            libxl_string_list pairs;
+            char *path = NULL;
+            int len;
+
+            chn = ARRAY_EXTEND_INIT(d_config->channels, d_config->num_channels,
+                                   libxl_device_channel_init);
+
+            split_string_into_string_list(buf, ",", &pairs);
+            len = libxl_string_list_length(&pairs);
+            for (i = 0; i < len; i++) {
+                char *key, *key_untrimmed, *value, *value_untrimmed;
+                int rc;
+                rc = split_string_into_pair(pairs[i], "=",
+                                            &key_untrimmed,
+                                            &value_untrimmed);
+                if (rc != 0) {
+                    fprintf(stderr, "failed to parse channel configuration: %s",
+                            pairs[i]);
+                    exit(1);
+                }
+                trim(isspace, key_untrimmed, &key);
+                trim(isspace, value_untrimmed, &value);
+
+                if (!strcmp(key, "backend")) {
+                    replace_string(&chn->backend_domname, value);
+                } else if (!strcmp(key, "name")) {
+                    replace_string(&chn->name, value);
+                } else if (!strcmp(key, "path")) {
+                    replace_string(&path, value);
+                } else if (!strcmp(key, "connection")) {
+                    if (!strcmp(value, "pty")) {
+                        chn->connection = LIBXL_CHANNEL_CONNECTION_PTY;
+                    } else if (!strcmp(value, "socket")) {
+                        chn->connection = LIBXL_CHANNEL_CONNECTION_SOCKET;
+                    } else {
+                        fprintf(stderr, "unknown channel connection '%s'\n",
+                                value);
+                        exit(1);
+                    }
+                } else {
+                    fprintf(stderr, "unknown channel parameter '%s',"
+                                  " ignoring\n", key);
+                }
+                free(key);
+                free(key_untrimmed);
+                free(value);
+                free(value_untrimmed);
+            }
+            switch (chn->connection){
+            case LIBXL_CHANNEL_CONNECTION_UNKNOWN:
+                fprintf(stderr, "channel has unknown 'connection'\n");
+                exit(1);
+            case LIBXL_CHANNEL_CONNECTION_SOCKET:
+                if (!path) {
+                    fprintf(stderr, "channel connection 'socket' requires path=..\n");
+                    exit(1);
+                }
+                chn->u.socket.path = xstrdup(path);
+                break;
+            default:
+                break;
+            }
+            libxl_string_list_dispose(&pairs);
+            free(path);
         }
     }
 
@@ -1890,13 +2039,6 @@ static int match_option_size(const char *prefix, size_t len,
 }
 #define MATCH_OPTION(prefix, arg, oparg) \
     match_option_size((prefix "="), sizeof((prefix)), (arg), &(oparg))
-
-static void replace_string(char **str, const char *val)
-{
-    free(*str);
-    *str = strdup(val);
-}
-
 
 /* Preserve a copy of a domain under a new name. Updates *r_domid */
 static int preserve_domain(uint32_t *r_domid, libxl_event *event,
@@ -5926,6 +6068,51 @@ int main_networkdetach(int argc, char **argv)
         return 1;
     }
     libxl_device_nic_dispose(&nic);
+    return 0;
+}
+
+int main_channellist(int argc, char **argv)
+{
+    int opt;
+    libxl_device_channel *channels;
+    libxl_channelinfo channelinfo;
+    int nb, i;
+
+    SWITCH_FOREACH_OPT(opt, "", NULL, "channel-list", 1) {
+        /* No options */
+    }
+
+    /*      Idx BE state evt-ch ring-ref connection params*/
+    printf("%-3s %-2s %-5s %-6s %8s %-10s %-30s\n",
+           "Idx", "BE", "state", "evt-ch", "ring-ref", "connection", "");
+    for (argv += optind, argc -= optind; argc > 0; --argc, ++argv) {
+        uint32_t domid = find_domain(*argv);
+        channels = libxl_device_channel_list(ctx, domid, &nb);
+        if (!channels) {
+            continue;
+        }
+        for (i = 0; i < nb; ++i) {
+            if (!libxl_device_channel_getinfo(ctx, domid, &channels[i],
+                &channelinfo)) {
+                printf("%-3d %-2d ", channels[i].devid, channelinfo.backend_id);
+                printf("%-5d ", channelinfo.state);
+                printf("%-6d %-8d ", channelinfo.evtch, channelinfo.rref);
+                printf("%-10s ", libxl_channel_connection_to_string(
+                       channels[i].connection));
+                switch (channels[i].connection) {
+                    case LIBXL_CHANNEL_CONNECTION_PTY:
+                        printf("%-30s ", channelinfo.u.pty.path);
+                        break;
+                    default:
+                        break;
+                }
+                printf("\n");
+                libxl_channelinfo_dispose(&channelinfo);
+            }
+            libxl_device_channel_dispose(&channels[i]);
+        }
+        free(channels);
+    }
     return 0;
 }
 
