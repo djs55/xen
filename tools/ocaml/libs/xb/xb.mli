@@ -23,7 +23,7 @@ module Op :
       | Resume
       | Set_target
       | Restrict
-      | Invalid (* Not a valid wire operation *)
+      | Invalid
     val operation_c_mapping : operation array
     val size : int
     val array_search : 'a -> 'a array -> int
@@ -80,6 +80,7 @@ val read : t -> string -> int -> int
 val write_fd : backend_fd -> 'a -> string -> int -> int
 val write_mmap : backend_mmap -> 'a -> string -> int -> int
 val write : t -> string -> int -> int
+val handle_closing : (t -> 'a) -> t -> 'a
 val output : t -> bool
 val input : t -> bool
 val newcon : backend -> t
