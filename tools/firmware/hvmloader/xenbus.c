@@ -37,6 +37,19 @@ static struct xenstore_domain_interface *rings; /* Shared ring with dom0 */
 static evtchn_port_t event;                     /* Event-channel to dom0 */
 static char payload[XENSTORE_PAYLOAD_MAX + 1];  /* Unmarshalling area */
 
+static void ring_wait(void)
+{
+    struct shared_info *shinfo = get_shared_info();
+    struct sched_poll poll;
+
+    memset(&poll, 0, sizeof(poll));
+    set_xen_guest_handle(poll.ports, &event);
+    poll.nr_ports = 1;
+
+    while ( !test_and_clear_bit(event, shinfo->evtchn_pending) )
+        hypercall_sched_op(SCHEDOP_poll, &poll);
+}
+
 /* Connect our xenbus client to the backend.
  * Call once, before any other xenbus actions. */
 void xenbus_setup(void)
@@ -64,10 +77,15 @@ void xenbus_shutdown(void)
 
     ASSERT(rings != NULL);
 
-    /* We zero out the whole ring -- the backend can handle this, and it's 
-     * not going to surprise any frontends since it's equivalent to never 
-     * having used the rings. */
-    memset(rings, 0, sizeof *rings);
+    if (rings->server_version > 0) {
+        rings->closing = 1;
+        while (*(volatile uint32_t*)&rings->closing == 1)
+            ring_wait ();
+    } else
+        /* If the backend reads the state while we're erasing it then the
+         * ring state will become corrupted, preventing guest frontends from
+         * connecting. This is rare. */
+        memset(rings, 0, sizeof *rings);
 
     /* Clear the event-channel state too. */
     memset(shinfo->vcpu_info, 0, sizeof(shinfo->vcpu_info));
@@ -75,19 +93,6 @@ void xenbus_shutdown(void)
     memset(shinfo->evtchn_mask, 0, sizeof(shinfo->evtchn_mask));
 
     rings = NULL;
-}
-
-static void ring_wait(void)
-{
-    struct shared_info *shinfo = get_shared_info();
-    struct sched_poll poll;
-
-    memset(&poll, 0, sizeof(poll));
-    set_xen_guest_handle(poll.ports, &event);
-    poll.nr_ports = 1;
-
-    while ( !test_and_clear_bit(event, shinfo->evtchn_pending) )
-        hypercall_sched_op(SCHEDOP_poll, &poll);
 }
 
 /* Helper functions: copy data in and out of the ring */
