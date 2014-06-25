@@ -14,5 +14,16 @@
  * GNU Lesser General Public License for more details.
  *)
 
+exception Closing
+
+let _ =
+  Callback.register_exception "Xs_ring.Closing" Closing
+
 external read: Xenmmap.mmap_interface -> string -> int -> int = "ml_interface_read"
 external write: Xenmmap.mmap_interface -> string -> int -> int = "ml_interface_write"
+
+
+external set_server_version: Xenmmap.mmap_interface -> int -> unit = "ml_interface_set_server_version" "noalloc"
+external get_server_version: Xenmmap.mmap_interface -> int = "ml_interface_get_server_version" "noalloc"
+
+external close: Xenmmap.mmap_interface -> unit = "ml_interface_close" "noalloc"

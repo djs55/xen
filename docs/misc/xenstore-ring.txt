@@ -1,0 +1,79 @@
+
+The domain builder allocates a single page and shares it with the xenstore
+daemon. This document describes the ring protocol used to communicate via
+this page which is used to transmit and receive
+[xenstore protocol packets](xenstore.txt).
+
+In the original version (we call this "version 0"), the shared page has the
+following contents (all offsets and lengths are in octets):
+
+Offset  Length  Description
+-----------------------------------------------------------------
+0       1024    Requests: data sent to the xenstore daemon
+1024    1024    Replies: data sent to the domain
+2048    4       Request consumer offset
+2052    4       Request producer offset
+2056    4       Response consumer offset
+2060    4       Response producer offset
+
+When the page is allocated it is guaranteed to be full of zeroes.
+
+The "Requests" and "Replies" are treated as circular buffers, one for
+each direction. Each circular buffer is associated wth a producer and
+consumer offset, which are free-running counters starting from 0. A "producer"
+offset is the offset in the byte stream of the next byte to be written; a
+"consumer" offset is the offset in the byte stream of the next byte to be
+read. The byte at offset 'x' in the byte stream will be stored in
+offset 'x mod 1024' in the circular buffer. "producer - consumer" gives
+the number of bytes still to be read, and "1024 - (producer - consumer)"
+therefore gives the amount of space currently available for writing,
+where we must avoid overwriting unread data.
+
+The circular buffers are only used to send sequences of bytes between domains.
+It is the responsibility of the layer above to segment these bytes into
+packets, as described in [xenstore.txt](xenstore.txt).
+
+The client and server domains can run concurrently on different cores and
+different sockets. We must therefore take care to avoid corruption by:
+
+  1. using atomic loads and stores when reading and writing the producer
+     and consumer offsets. If an offset were to be updated by a non-atomic
+     store then the other domain may read an invalid offset value.
+  2. ensuring request and reply data is fully read or written before
+     updating the offsets by issuing a memory barrier.
+
+If we wish to read data but find the circular buffer empty, or wish to write
+data and find the circular buffer full, we wait on a pre-arranged event
+channel. When the other party next reads or writes data to the ring, it
+will notify() this event channel and we will wake.
+
+Protocol extension for reconnection
+-----------------------------------
+
+In version 0 of the protocol it is not possible to close and reopen the
+connection. This means that if the ring is corrupted, it can never be used
+(safely) again. Extending the protocol to allow reconnection would allow
+us to:
+
+  1. use the ring in the firmware (hvmloader) and safely reset it for use
+     by the guest
+  2. re-establish a ring in a 'crash kernel' environment, allowing us to
+     write crash dumps to PV disks or network devices.
+
+In version 1 of the protocol the ring is extended with the following
+fields:
+
+Offset  Length  Description
+-----------------------------------------------------------------
+2064    4       Xenstore daemon supported protocol version
+2068    4       Close request flag
+
+In a system supporting only version 0, both these fields are guaranteed
+to contain 0 by the domain builder.
+
+In a system supporting version 1, the xenstore daemon will write "1" into
+the support protocol version field. The guest xenstore client (eg in
+hvmloader) can query the version, and if it is set to "1" it can write
+"1" to the close request flag and call notify(). The supporting xenstore
+daemon can reset the ring to an empty state and signal completion by
+clearing the flag and calling notify() again.

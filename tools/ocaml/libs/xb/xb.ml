@@ -84,7 +84,26 @@ let write con s len =
 	| Fd backfd     -> write_fd backfd con s len
 	| Xenmmap backmmap -> write_mmap backmmap con s len
 
-let output con =
+(* If a function throws Xs_ring.Closing, then clear the ring state
+   and serve the ring again. *)
+let rec handle_closing f con =
+	match (try Some (f con) with Xs_ring.Closing -> None) with
+	| Some x -> x
+	| None ->
+		begin match con.backend with
+		| Fd _ -> raise Xs_ring.Closing (* should never happen, but just in case *)
+		| Xenmmap backend ->
+			Xs_ring.close backend.mmap;
+			backend.eventchn_notify ();
+			(* Clear our old connection state *)
+			Queue.clear con.pkt_in;
+			Queue.clear con.pkt_out;
+			con.partial_in <- init_partial_in ();
+			con.partial_out <- "";
+			handle_closing f con
+		end
+
+let output = handle_closing (fun con ->
 	(* get the output string from a string_of(packet) or partial_out *)
 	let s = if String.length con.partial_out > 0 then
 			con.partial_out
@@ -101,8 +120,9 @@ let output con =
 	);
 	(* after sending one packet, partial is empty *)
 	con.partial_out = ""
+)
 
-let input con =
+let input = handle_closing (fun con ->
 	let newpacket = ref false in
 	let to_read =
 		match con.partial_in with
@@ -133,6 +153,7 @@ let input con =
 			HaveHdr (Partial.of_string buf) else NoHdr (i - sz, buf)
 	);
 	!newpacket
+)
 
 let newcon backend = {
 	backend = backend;
@@ -145,6 +166,7 @@ let newcon backend = {
 let open_fd fd = newcon (Fd { fd = fd; })
 
 let open_mmap mmap notifyfct =
+	Xs_ring.set_server_version mmap 1; (* defined in xs_wire.h *)
 	newcon (Xenmmap {
 		mmap = mmap;
 		eventchn_notify = notifyfct;
