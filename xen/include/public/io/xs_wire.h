@@ -108,14 +108,22 @@ enum xs_watch_type
  * `incontents 150 xenstore_struct XenStore wire protocol.
  *
  * Inter-domain shared memory communications. */
+
+#define XENSTORE_VERSION_0 0
+#define XENSTORE_VERSION_1 1
+
 #define XENSTORE_RING_SIZE 1024
 typedef uint32_t XENSTORE_RING_IDX;
 #define MASK_XENSTORE_IDX(idx) ((idx) & (XENSTORE_RING_SIZE-1))
 struct xenstore_domain_interface {
+    /* XENSTORE_VERSION_0 */
     char req[XENSTORE_RING_SIZE]; /* Requests to xenstore daemon. */
     char rsp[XENSTORE_RING_SIZE]; /* Replies and async watch events. */
     XENSTORE_RING_IDX req_cons, req_prod;
     XENSTORE_RING_IDX rsp_cons, rsp_prod;
+    uint32_t server_version;
+    /* XENSTORE_VERSION_1 */
+    uint32_t closing;
 };
 
 /* Violating this is very bad.  See docs/misc/xenstore.txt. */
