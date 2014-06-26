@@ -9,39 +9,62 @@ relevant information in xenstore under /local/domain/$DOMID/console.
 
 Now many years after the introduction of the pv console we have
 multiple pv consoles support for pv and hvm guests; multiple pv
-console backends (qemu and xenconsoled) and emulated serial cards too.
+console backends (qemu and xenconsoled, see limitations below) and
+emulated serial cards too.
 
 This document tries to describe how the whole system works and how the
 different components interact with each others.
 
 The first PV console path in xenstore remains:
 
-/local/domain/$DOMID/console
+~frontend/console
 
 the other PV consoles follow the conventional xenstore device path and
 live in:
 
-/local/domain/$DOMID/device/console/$DEVID.
+~frontend/device/console/$DEVID.
 
-The output of a PV console, whether it should be a file, a pty, a
-socket, or something else, is specified by the toolstack in the xenstore
-node "output", under the relevant console section.
-For example:
+PV consoles have an optional string name which, if present, is stored in
+the "name" node in the console directory. We call PV consoles with names,
+"channels", in reference to the libvirt concept with the same name and purpose.
+The file "channels.txt" describes the intended use-cases of channels in more
+detail.
 
-# xenstore-read /local/domain/26/device/console/1/output
-pty
+The desired output of a PV console, is specified by the toolstack in the
+xenstore backend nodes "kind" and "path".
 
-The backend chosen for a particular console is specified by the
-toolstack in the "type" node on xenstore, under the relevant console
-section.
+If the toolstack wants the console to be connected to a pty, it will write:
+
+kind = pty
+
+If the toolstack wants a listening Unix domain socket to be created at path
+<path>, a connection accepted and data proxied to the console, it will write:
+
+kind = socket
+path = <path>
+
+The backend implementation daemon chosen for a particular console is specified
+by the toolstack in the "type" node in the xenstore frontend.
 For example:
 
 # xenstore-read /local/domain/26/console/1/type
-xenconsoled
+ioemu
 
 The supported values are only xenconsoled or ioemu; xenconsoled has
 several limitations: it can only be used for the first PV console and it
 can only have a pty as output.
+
+The toolstack uses the xenstore node "output" to communicate with the backend
+implementation daemon. Currently used values are:
+
+# xenstore-read /local/domain/26/device/console/1/output
+pty
+  -- if "kind" is set to "pty"
+
+# xenstore-read /local/domain/26/device/console/2/output
+chardev:libxl-channel%d
+  -- if "kind" is set to "socket". The chardev "libxl-channel%d" will be
+     configured via the qemu command-line.
 
 If the output is a pty, backends write the device name to the "tty" node
 in xenstore under the relevant console path.

@@ -1,8 +1,5 @@
 Xen PV Channels
 ------------------------------------------------------------------------
-                                                             David Scott
-                                                   dave.scott@citrix.com
-
 
 A channel is a low-bandwidth private byte stream similar to a serial
 link. Typical uses of channels are
@@ -18,35 +15,85 @@ used in the implementation of libvirt <channel>s when running on Xen.
 Note: if an application requires a high-bandwidth link then it should use
 vchan instead.
 
-From the frontend's point of view, a channel is a PV console with a
-name, a where the name can be used to locate the correct device. The
-name is stored in the frontend xenstore directory:
+How to use channels: an example
+-------------------------------
 
-  /local/domain/$DOMID/device/console/$DEVID/name
+Consider a cloud deployment where VMs are cloned from pre-made templates,
+and customised on first boot by an in-guest agent which sets the IP address,
+hostname, ssh keys etc. To set up the system the cloud administrator would
+first:
 
-The frontend can check for this key when the console is hotplugged,
-and handle the device appropriately. For example the frontend could
-spawn a guest agent when a channel with a well-known name is created,
-and still spawn regular getty processes when a normal console is created.
+  1. Install a guest as normal (no channel configuration necessary)
+  2. Install the in-guest agent specific to the cloud software. This will
+     prepare the guest to communicate over the channel, and also probably
+     prepare the guest to be cloned safely (sometimes known as "sysprepping")
+  3. Shutdown the guest
+  4. Register the guest as a template with the cloud orchestration software
+  5. Install the cloud orchestration agent in dom0
 
-The backend has an associated 'kind' which describes what the backend
-should do with the data. Thee are two defined values: 'pty' and 'socket'.
+When a cloud tenant requests that a VM is created from the template,
+the sequence of events would be:
 
-If 'kind=pty' then the backend will connect to a PTY like a regular
-console. The pty device will be written into the 'tty' key in the
-frontend.
+  1. A VM is "cloned" from the template
+  2. A unique Unix domain socket path in dom0 is allocated
+     (e.g. /my/cloud/software/talk/to/domain/<vm uuid>)
+  3. Domain configuration is created for the VM, listing the channel
+     name expected by the in-guest agent. In xl syntax this would be:
 
-If 'kind=socket' then the backend will create a listening Unix domain
-socket in the path given by 'path=<path>'. Connections will be
-accepted and the data proxied in both directions.
+     channel = [ "kind=socket, name=org.my.cloud.software.agent.version1,
+                  path = /my/cloud/software/talk/to/domain/<vm uuid>" ]
 
-In the default implementation the backend is implemented via qemu
-in "xenpv" mode (i.e. the 'console' device in xenstore will have
-'type=ioemu'). Futhermore if 'kind=socket' then the console 'output'
-in xenstore will be set to:
- 
-  output = chardev:libxl-channel$DEVID
+  4. The VM is started
+  5. In dom0 the cloud orchestration agent connects to the Unix domain
+     socket, writes a handshake message and waits for a reply
+  6. In the guest, a udev rule (or similar) which was installed with the
+     in-guest agent is activated by the hotplug event, and it starts the
+     in-guest agent.
+  7. The in-guest agent completes a handshake with the dom0 agent
+  8. The dom0 agent transmits the unique VM configuration: hostname, IP
+     address, ssh keys etc etc
+  9. The in-guest agent receives the configuration and applies it.
 
-The qemu commandline contains one "-chardev id=libxl-channel$DEVID,..."
-option per channel.
+Using channels avoids having to use a temporary disk device or network
+connection.
 
+Design recommendations and pitfalls
+-----------------------------------
+
+It's necessary to install channel-specific software (an "agent") into the guest
+before you can use a channel. By default a channel will appear as a device
+which could be mistaken for a serial port or regular console. It is known
+that some software will proactively seek out serial ports and issue AT commands
+at them; make sure such software is disabled!
+
+Since channels are identified by names, application authors must ensure their
+channel names are unique to avoid clashes. We recommend that channel names
+include parts unique to the application, such as a domain names. To assist
+prevent clashes we recommend authors add their names to our global channel
+registry, in the file channel-registry.txt.
+
+Implementation notes
+--------------------
+
+The current implementation of channels re-uses the PV console mechanism, where
+a channel is a "console with a name".
+
+The implementation currently always uses qemu as the daemon in the backend.
+This is due to a limitation in xenconsoled: it is not currently capable of
+managing multiple consoles per domain.
+
+If the channel has "kind = pty" then the "output" node in xenstore will be
+set to "pty".
+
+If the channel has "kind = socket" then the "output" node in xenstore will
+be set to "chardev:libxl-channel%d". This tells the qemu console backend to
+proxy data between the console ring and the character device with id
+"libxl-channel%d". These character devices are currently defined on the
+qemu command-line via "-chardev" options.
+
+Hotplug and unplug of channels is not currently implemented. There are 2
+implementation possibilities:
+
+1.  add support for dynamically creating and destroying qemu chardevs via
+    qmp messages
+2.  add support in xenconsoled for managing multiple consoles
