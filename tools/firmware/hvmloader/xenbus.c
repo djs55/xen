@@ -83,7 +83,7 @@ void xenbus_shutdown(void)
 
     if (rings->server_version > 0) {
         rings->closing = 1;
-        while ( *(volatile uint32_t*)&rings->closing == 1)
+        while (*(volatile uint32_t*)&rings->closing == 1)
             ring_wait ();
     } else
         /* If the backend reads the state while we're erasing it then the
