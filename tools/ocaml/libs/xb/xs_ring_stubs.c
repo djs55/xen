@@ -44,7 +44,7 @@ static int xs_ring_read(struct mmap_interface *interface,
 	struct xenstore_domain_interface *intf = interface->addr;
 	XENSTORE_RING_IDX cons, prod; /* offsets only */
 	int to_read;
-        uint32_t closing;
+	uint32_t closing;
 
 	cons = *(volatile uint32*)&intf->req_cons;
 	prod = *(volatile uint32*)&intf->req_prod;

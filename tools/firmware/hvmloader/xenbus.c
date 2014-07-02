@@ -81,16 +81,15 @@ void xenbus_shutdown(void)
 
     ASSERT(rings != NULL);
 
-    if (rings->server_version > XENSTORE_VERSION_0) {
+    if (rings->server_version > 0) {
         rings->closing = 1;
-        while (rings->closing == 1)
+        while ( *(volatile uint32_t*)&rings->closing == 1)
             ring_wait ();
-    } else {
+    } else
         /* If the backend reads the state while we're erasing it then the
-           ring state will become corrupted, preventing guest frontends from
-           connecting. This is rare. */
+         * ring state will become corrupted, preventing guest frontends from
+         * connecting. This is rare. */
         memset(rings, 0, sizeof *rings);
-    }
 
     /* Clear the event-channel state too. */
     memset(shinfo->vcpu_info, 0, sizeof(shinfo->vcpu_info));
