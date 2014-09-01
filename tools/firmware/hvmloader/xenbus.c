@@ -74,11 +74,14 @@ void xenbus_setup(void)
 void xenbus_shutdown(void)
 {
     struct shared_info *shinfo = get_shared_info();
+    evtchn_send_t send;
 
     ASSERT(rings != NULL);
 
     if (rings->server_version > 0) {
         rings->closing = 1;
+        send.port = event;
+        hypercall_event_channel_op(EVTCHNOP_send, &send);
         while (*(volatile uint32_t*)&rings->closing == 1)
             ring_wait ();
     } else
