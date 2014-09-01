@@ -1,79 +1,98 @@
+The xenstore ring is a datastructure stored within a single 4k page
+shared between the xenstore daemon and the guest. The ring contains
+two queues of bytes, in each direction. The
+[xenstore protocol](xenstore.txt) is layered on top of the byte streams.
 
-The domain builder allocates a single page and shares it with the xenstore
-daemon. This document describes the ring protocol used to communicate via
-this page which is used to transmit and receive
-[xenstore protocol packets](xenstore.txt).
+The xenstore ring datastructure
+===============================
 
-In the original version (we call this "version 0"), the shared page has the
-following contents (all offsets and lengths are in octets):
-
-Offset  Length  Description
------------------------------------------------------------------
-0       1024    Requests: data sent to the xenstore daemon
-1024    1024    Replies: data sent to the domain
-2048    4       Request consumer offset
-2052    4       Request producer offset
-2056    4       Response consumer offset
-2060    4       Response producer offset
-
-When the page is allocated it is guaranteed to be full of zeroes.
-
-The "Requests" and "Replies" are treated as circular buffers, one for
-each direction. Each circular buffer is associated wth a producer and
-consumer offset, which are free-running counters starting from 0. A "producer"
-offset is the offset in the byte stream of the next byte to be written; a
-"consumer" offset is the offset in the byte stream of the next byte to be
-read. The byte at offset 'x' in the byte stream will be stored in
-offset 'x mod 1024' in the circular buffer. "producer - consumer" gives
-the number of bytes still to be read, and "1024 - (producer - consumer)"
-therefore gives the amount of space currently available for writing,
-where we must avoid overwriting unread data.
-
-The circular buffers are only used to send sequences of bytes between domains.
-It is the responsibility of the layer above to segment these bytes into
-packets, as described in [xenstore.txt](xenstore.txt).
-
-The client and server domains can run concurrently on different cores and
-different sockets. We must therefore take care to avoid corruption by:
-
-  1. using atomic loads and stores when reading and writing the producer
-     and consumer offsets. If an offset were to be updated by a non-atomic
-     store then the other domain may read an invalid offset value.
-  2. ensuring request and reply data is fully read or written before
-     updating the offsets by issuing a memory barrier.
-
-If we wish to read data but find the circular buffer empty, or wish to write
-data and find the circular buffer full, we wait on a pre-arranged event
-channel. When the other party next reads or writes data to the ring, it
-will notify() this event channel and we will wake.
-
-Protocol extension for reconnection
------------------------------------
-
-In version 0 of the protocol it is not possible to close and reopen the
-connection. This means that if the ring is corrupted, it can never be used
-(safely) again. Extending the protocol to allow reconnection would allow
-us to:
-
-  1. use the ring in the firmware (hvmloader) and safely reset it for use
-     by the guest
-  2. re-establish a ring in a 'crash kernel' environment, allowing us to
-     write crash dumps to PV disks or network devices.
-
-In version 1 of the protocol the ring is extended with the following
-fields:
+The following table describes the ring structure where
+  - offsets and lengths are in bytes; 
+  - "Input" is used to describe the data sent to the daemon; and
+  - "Output" is used to describe the data sent to the domain.
 
 Offset  Length  Description
 -----------------------------------------------------------------
-2064    4       Xenstore daemon supported protocol version
-2068    4       Close request flag
+0       1024    Input data
+1024    1024    Output data
+2048    4       Input consumer offset
+2052    4       Input producer offset
+2056    4       Output consumer offset
+2060    4       Output producer offset
+2064    4       Daemon feature bitmap
+2068    4       Connection bitmap
 
-In a system supporting only version 0, both these fields are guaranteed
-to contain 0 by the domain builder.
+The Input data and Output data are circular buffers. Each buffer is
+associated with a pair of free-running offsets labelled "consumer" and
+"producer".
 
-In a system supporting version 1, the xenstore daemon will write "1" into
-the support protocol version field. The guest xenstore client (eg in
-hvmloader) can query the version, and if it is set to "1" it can write
-"1" to the close request flag and call notify(). The supporting xenstore
-daemon can reset the ring to an empty state and signal completion by
-clearing the flag and calling notify() again.
+A "producer" offset is the offset in the byte stream of the next byte
+to be written modulo 2^32. A "consumer" offset is the offset in the byte
+stream of the next byte to be read modulo 2^32. Implementations must
+take care to handle wraparound properly when performing arithmetic with
+these values.
+
+The byte at offset 'x' in the byte stream will be stored at offset
+'x modulo 1024' in the circular buffer.
+
+When the guest domain is created, there is no outstanding Input or Output
+data. Implementations must not assume that producer or consumer pointers
+are zero.
+
+A xenstore ring is always associated with an event channel. Whenever the
+ring structure is updated the event channel must be signalled. The
+guest and daemon are free to inspect the contents of the ring at any
+time, not only in response to an event channel event.
+
+The xenstore daemon may decide to advertise some features via the
+"Daemon feature bitmap". The daemon can start advertising features
+at any time by setting bits but it will never stop advertising features
+i.e. bits will never be cleared. The guest is not permitted to write to
+the daemon feature bitmap.
+
+The following features are defined:
+
+Mask    Description
+-----------------------------------------------------------------
+0x1     Ring reconnection
+
+The following bits are defined in the Connection bitmap:
+
+Mask    Description
+-----------------------------------------------------------------
+0x1     Ring reconnection is in progress
+
+The "Ring connection is in progress" bit is only used by the
+"ring reconnection feature" described below:
+
+The ring reconnection feature
+=============================
+
+The ring reconnection feature allows the guest to ask the daemon to
+reset the ring to a valid initial state i.e. where the Input and Output
+queues contain no data. The feature operates at the ring-level only;
+it does not affect the higher-level protocol at all. To reset the
+higher-level protocol, please read about the 'RESET WATCHES'
+command in the [xenstore protocol](xenstore.txt) specification.
+
+The ring reconnection feature is only available if the 'Ring reconnection'
+feature bit is set in the "Daemon feature bitmap".
+
+Assuming the daemon has advertised the feature, the guest can initiate
+a reconnection by setting the "Ring reconnection is in progress" bit in
+the Connection bitmap and signalling the event channel. The guest will
+ignore all fields except the reconnection bit.
+
+The daemon will
+
+  - drop any partially read or written higher-level
+    [xenstore protocol](xenstore.txt) packets it may have;
+  - empty the Input and Output queues in the xenstore ring;
+  - clear the "Ring reconnection is in progress bit"; and
+  - signal the event channel.
+
+From the point of view of the higher-level [xenstore protocol](xenstore.txt)
+the connection has been reset on a packet boundary.
+
+Only the guest may set the "Ring reconnection is in progress" bit and
+only the daemon may clear it.
