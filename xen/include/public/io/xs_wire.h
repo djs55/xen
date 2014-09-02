@@ -115,7 +115,6 @@ enum xs_watch_type
 typedef uint32_t XENSTORE_RING_IDX;
 #define MASK_XENSTORE_IDX(idx) ((idx) & (XENSTORE_RING_SIZE-1))
 struct xenstore_domain_interface {
-    /* XENSTORE_VERSION_0 */
     char req[XENSTORE_RING_SIZE]; /* Requests to xenstore daemon. */
     char rsp[XENSTORE_RING_SIZE]; /* Replies and async watch events. */
     XENSTORE_RING_IDX req_cons, req_prod;
