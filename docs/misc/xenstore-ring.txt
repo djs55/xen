@@ -1,5 +1,5 @@
 The xenstore ring is a datastructure stored within a single 4k page
-shared between the xenstore daemon and the guest. The ring contains
+shared between the xenstore server and the guest. The ring contains
 two queues of bytes, in each direction. The
 [xenstore protocol](xenstore.txt) is layered on top of the byte streams.
 
@@ -8,7 +8,7 @@ The xenstore ring datastructure
 
 The following table describes the ring structure where
   - offsets and lengths are in bytes; 
-  - "Input" is used to describe the data sent to the daemon; and
+  - "Input" is used to describe the data sent to the server; and
   - "Output" is used to describe the data sent to the domain.
 
 Offset  Length  Description
@@ -19,8 +19,8 @@ Offset  Length  Description
 2052    4       Input producer offset
 2056    4       Output consumer offset
 2060    4       Output producer offset
-2064    4       Daemon feature bitmap
-2068    4       Connection bitmap
+2064    4       Server feature bitmap
+2068    4       Connection state
 
 The Input data and Output data are circular buffers. Each buffer is
 associated with a pair of free-running offsets labelled "consumer" and
@@ -41,34 +41,34 @@ are zero.
 
 A xenstore ring is always associated with an event channel. Whenever the
 ring structure is updated the event channel must be signalled. The
-guest and daemon are free to inspect the contents of the ring at any
+guest and server are free to inspect the contents of the ring at any
 time, not only in response to an event channel event.
 
-The xenstore daemon may decide to advertise some features via the
-"Daemon feature bitmap". The daemon can start advertising features
+The xenstore server may decide to advertise some features via the
+"Server feature bitmap". The server can start advertising features
 at any time by setting bits but it will never stop advertising features
 i.e. bits will never be cleared. The guest is not permitted to write to
-the daemon feature bitmap.
+the server feature bitmap. The guest should ignore any unknown feature
+bits.
 
 The following features are defined:
 
 Mask    Description
 -----------------------------------------------------------------
-0x1     Ring reconnection
+1       Ring reconnection
 
-The following bits are defined in the Connection bitmap:
+The following values are defined in the Connection state:
 
-Mask    Description
+Value   Description
 -----------------------------------------------------------------
-0x1     Ring reconnection is in progress
-
-The "Ring connection is in progress" bit is only used by the
-"ring reconnection feature" described below:
+0       Ring is connected
+1       Ring close and reconnect is in progress (see the "ring
+        reconnection feature" described below)
 
 The ring reconnection feature
 =============================
 
-The ring reconnection feature allows the guest to ask the daemon to
+The ring reconnection feature allows the guest to ask the server to
 reset the ring to a valid initial state i.e. where the Input and Output
 queues contain no data. The feature operates at the ring-level only;
 it does not affect the higher-level protocol at all. To reset the
@@ -76,23 +76,24 @@ higher-level protocol, please read about the 'RESET WATCHES'
 command in the [xenstore protocol](xenstore.txt) specification.
 
 The ring reconnection feature is only available if the 'Ring reconnection'
-feature bit is set in the "Daemon feature bitmap".
+feature bit is set in the "Server feature bitmap".
 
-Assuming the daemon has advertised the feature, the guest can initiate
+Assuming the server has advertised the feature, the guest can initiate
 a reconnection by setting the "Ring reconnection is in progress" bit in
-the Connection bitmap and signalling the event channel. The guest will
-ignore all fields except the reconnection bit.
+the Connection bitmap and signalling the event channel. The guest must
+now ignore all fields except the reconnection bit and wait to be signalled
+on the event channel.
 
-The daemon will
+The server will
 
   - drop any partially read or written higher-level
     [xenstore protocol](xenstore.txt) packets it may have;
   - empty the Input and Output queues in the xenstore ring;
-  - clear the "Ring reconnection is in progress bit"; and
+  - clear the "Ring close and reconnect is in progress bit"; and
   - signal the event channel.
 
 From the point of view of the higher-level [xenstore protocol](xenstore.txt)
 the connection has been reset on a packet boundary.
 
-Only the guest may set the "Ring reconnection is in progress" bit and
-only the daemon may clear it.
+Note that only the guest may set the "Ring reconnection is in progress" bit
+and only the server may clear it.

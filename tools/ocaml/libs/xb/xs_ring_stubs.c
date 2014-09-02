@@ -44,13 +44,13 @@ static int xs_ring_read(struct mmap_interface *interface,
 	struct xenstore_domain_interface *intf = interface->addr;
 	XENSTORE_RING_IDX cons, prod; /* offsets only */
 	int to_read;
-	uint32_t closing;
+	uint32_t connection;
 
 	cons = *(volatile uint32*)&intf->req_cons;
 	prod = *(volatile uint32*)&intf->req_prod;
-	closing = *(volatile uint32*)&intf->closing;
+	connection = *(volatile uint32*)&intf->connection;
 
-	if (closing != 0)
+	if (connection != XENSTORE_CONNECTED)
 		return ERROR_CLOSING;
 
 	xen_mb();
@@ -80,13 +80,13 @@ static int xs_ring_write(struct mmap_interface *interface,
 	struct xenstore_domain_interface *intf = interface->addr;
 	XENSTORE_RING_IDX cons, prod;
 	int can_write;
-	uint32_t closing;
+	uint32_t connection;
 
 	cons = *(volatile uint32*)&intf->rsp_cons;
 	prod = *(volatile uint32*)&intf->rsp_prod;
-	closing = *(volatile uint32*)&intf->closing;
+	connection = *(volatile uint32*)&intf->connection;
 
-	if (closing != 0)
+	if (connection != XENSTORE_CONNECTED)
 		return ERROR_CLOSING;
 
 	xen_mb();
@@ -116,7 +116,7 @@ CAMLprim value ml_interface_read(value interface, value buffer, value len)
 		caml_failwith("bad connection");
 
 	if (res == ERROR_CLOSING)
-		caml_raise_constant(*caml_named_value("Xs_ring.Closing"));
+		caml_raise_constant(*caml_named_value("Xs_ring.Reconnect"));
 
 	result = Val_int(res);
 	CAMLreturn(result);
@@ -132,28 +132,28 @@ CAMLprim value ml_interface_write(value interface, value buffer, value len)
 	                    String_val(buffer), Int_val(len));
 
 	if (res == ERROR_CLOSING)
-		caml_raise_constant(*caml_named_value("Xs_ring.Closing"));
+		caml_raise_constant(*caml_named_value("Xs_ring.Reconnect"));
 
 	result = Val_int(res);
 	CAMLreturn(result);
 }
 
-CAMLprim value ml_interface_set_server_version(value interface, value v)
+CAMLprim value ml_interface_set_server_features(value interface, value v)
 {
 	CAMLparam2(interface, v);
 	struct xenstore_domain_interface *intf = GET_C_STRUCT(interface)->addr;
 
-	intf->server_version = Int_val(v);
+	intf->server_features = Int_val(v);
 
 	CAMLreturn(Val_unit);
 }
 
-CAMLprim value ml_interface_get_server_version(value interface)
+CAMLprim value ml_interface_get_server_features(value interface)
 {
 	CAMLparam1(interface);
 	struct xenstore_domain_interface *intf = GET_C_STRUCT(interface)->addr;
 
-	CAMLreturn(Val_int (intf->server_version));
+	CAMLreturn(Val_int (intf->server_features));
 }
 
 CAMLprim value ml_interface_close(value interface)
@@ -170,6 +170,6 @@ CAMLprim value ml_interface_close(value interface)
 		intf->rsp[i] = invalid_data[i % sizeof(invalid_data)];
 	}
 	xen_mb ();
-	intf->closing = 0;
+	intf->connection = XENSTORE_CONNECTED;
 	CAMLreturn(Val_unit);
 }

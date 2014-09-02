@@ -78,11 +78,11 @@ void xenbus_shutdown(void)
 
     ASSERT(rings != NULL);
 
-    if (rings->server_version > 0) {
-        rings->closing = 1;
+    if (rings->server_features & XENSTORE_SERVER_FEATURE_RECONNECTION) {
+        rings->connection = XENSTORE_RECONNECT;
         send.port = event;
         hypercall_event_channel_op(EVTCHNOP_send, &send);
-        while (*(volatile uint32_t*)&rings->closing == 1)
+        while (*(volatile uint32_t*)&rings->connection == XENSTORE_RECONNECT)
             ring_wait ();
     } else
         /* If the backend reads the state while we're erasing it then the
