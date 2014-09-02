@@ -36,8 +36,9 @@ The byte at offset 'x' in the byte stream will be stored at offset
 'x modulo 1024' in the circular buffer.
 
 When the guest domain is created, there is no outstanding Input or Output
-data. Implementations must not assume that producer or consumer pointers
-are zero.
+data. Guests must not assume that producer or consumer pointers start
+at zero. Guests should not assume that unused data in either the Input or
+Output data buffers has any particular value.
 
 A xenstore ring is always associated with an event channel. Whenever the
 ring structure is updated the event channel must be signalled. The

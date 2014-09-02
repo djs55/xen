@@ -49,7 +49,9 @@ enum xsd_sockmsg_type
     XS_RESUME,
     XS_SET_TARGET,
     XS_RESTRICT,
-    XS_RESET_WATCHES
+    XS_RESET_WATCHES,
+
+    XS_INVALID = 0xffff /* Guaranteed to remain an invalid type */
 };
 
 #define XS_WRITE_NONE "NONE"

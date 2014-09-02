@@ -159,15 +159,14 @@ CAMLprim value ml_interface_get_server_features(value interface)
 CAMLprim value ml_interface_close(value interface)
 {
 	CAMLparam1(interface);
-	const char invalid_data[] = { 'd', 'e', 'a', 'd', 'b', 'e', 'e', 'f' };
 	struct xenstore_domain_interface *intf = GET_C_STRUCT(interface)->addr;
 	int i;
 
 	intf->req_cons = intf->req_prod = intf->rsp_cons = intf->rsp_prod = 0;
 	/* Ensure the unused space is full of invalid xenstore packets. */
 	for (i = 0; i < XENSTORE_RING_SIZE; i++) {
-		intf->req[i] = invalid_data[i % sizeof(invalid_data)];
-		intf->rsp[i] = invalid_data[i % sizeof(invalid_data)];
+		intf->req[i] = 0xff; /* XS_INVALID = 0xffff */
+		intf->rsp[i] = 0xff;
 	}
 	xen_mb ();
 	intf->connection = XENSTORE_CONNECTED;
