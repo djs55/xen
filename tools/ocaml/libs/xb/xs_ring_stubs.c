@@ -35,12 +35,18 @@
 
 #define GET_C_STRUCT(a) ((struct mmap_interface *) a)
 
-#define ERROR_UNKNOWN (-1)
-#define ERROR_CLOSING (-2)
-
-static int xs_ring_read(struct mmap_interface *interface,
-                             char *buffer, int len)
+CAMLprim value ml_interface_read(value ml_interface,
+                                 value ml_buffer,
+                                 value ml_len)
 {
+	CAMLparam3(ml_interface, ml_buffer, ml_len);
+	CAMLlocal1(ml_result);
+
+	struct mmap_interface *interface = GET_C_STRUCT(ml_interface);
+	char *buffer = String_val(ml_buffer);
+	int len = Int_val(ml_len);
+	int result;
+
 	struct xenstore_domain_interface *intf = interface->addr;
 	XENSTORE_RING_IDX cons, prod; /* offsets only */
 	int to_read;
@@ -51,15 +57,17 @@ static int xs_ring_read(struct mmap_interface *interface,
 	connection = *(volatile uint32*)&intf->connection;
 
 	if (connection != XENSTORE_CONNECTED)
-		return ERROR_CLOSING;
+		caml_raise_constant(*caml_named_value("Xs_ring.Reconnect"));
 
 	xen_mb();
 
 	if ((prod - cons) > XENSTORE_RING_SIZE)
-	    return ERROR_UNKNOWN;
+		caml_failwith("bad connection");
 
-	if (prod == cons)
-		return 0;
+	if (prod == cons) {
+		result = 0;
+		goto exit;
+	}
 	cons = MASK_XENSTORE_IDX(cons);
 	prod = MASK_XENSTORE_IDX(prod);
 	if (prod > cons)
@@ -71,12 +79,24 @@ static int xs_ring_read(struct mmap_interface *interface,
 	memcpy(buffer, intf->req + cons, len);
 	xen_mb();
 	intf->req_cons += len;
-	return len;
+	result = len;
+exit:
+	ml_result = Val_int(result);
+	CAMLreturn(ml_result);
 }
 
-static int xs_ring_write(struct mmap_interface *interface,
-                              char *buffer, int len)
+CAMLprim value ml_interface_write(value ml_interface,
+                                  value ml_buffer,
+                                  value ml_len)
 {
+	CAMLparam3(ml_interface, ml_buffer, ml_len);
+	CAMLlocal1(ml_result);
+
+	struct mmap_interface *interface = GET_C_STRUCT(ml_interface);
+	char *buffer = String_val(ml_buffer);
+	int len = Int_val(ml_len);
+	int result;
+
 	struct xenstore_domain_interface *intf = interface->addr;
 	XENSTORE_RING_IDX cons, prod;
 	int can_write;
@@ -87,11 +107,13 @@ static int xs_ring_write(struct mmap_interface *interface,
 	connection = *(volatile uint32*)&intf->connection;
 
 	if (connection != XENSTORE_CONNECTED)
-		return ERROR_CLOSING;
+		caml_raise_constant(*caml_named_value("Xs_ring.Reconnect"));
 
 	xen_mb();
-	if ( (prod - cons) >= XENSTORE_RING_SIZE )
-		return 0;
+	if ( (prod - cons) >= XENSTORE_RING_SIZE ) {
+		result = 0;
+		goto exit;
+	}
 	if (MASK_XENSTORE_IDX(prod) >= MASK_XENSTORE_IDX(cons))
 		can_write = XENSTORE_RING_SIZE - MASK_XENSTORE_IDX(prod);
 	else 
@@ -101,41 +123,10 @@ static int xs_ring_write(struct mmap_interface *interface,
 	memcpy(intf->rsp + MASK_XENSTORE_IDX(prod), buffer, len);
 	xen_mb();
 	intf->rsp_prod += len;
-	return len;
-}
-
-CAMLprim value ml_interface_read(value interface, value buffer, value len)
-{
-	CAMLparam3(interface, buffer, len);
-	CAMLlocal1(result);
-	int res;
-
-	res = xs_ring_read(GET_C_STRUCT(interface),
-	                   String_val(buffer), Int_val(len));
-	if (res == ERROR_UNKNOWN)
-		caml_failwith("bad connection");
-
-	if (res == ERROR_CLOSING)
-		caml_raise_constant(*caml_named_value("Xs_ring.Reconnect"));
-
-	result = Val_int(res);
-	CAMLreturn(result);
-}
-
-CAMLprim value ml_interface_write(value interface, value buffer, value len)
-{
-	CAMLparam3(interface, buffer, len);
-	CAMLlocal1(result);
-	int res;
-
-	res = xs_ring_write(GET_C_STRUCT(interface),
-	                    String_val(buffer), Int_val(len));
-
-	if (res == ERROR_CLOSING)
-		caml_raise_constant(*caml_named_value("Xs_ring.Reconnect"));
-
-	result = Val_int(res);
-	CAMLreturn(result);
+	result = len;
+exit:
+	ml_result = Val_int(result);
+	CAMLreturn(ml_result);
 }
 
 CAMLprim value ml_interface_set_server_features(value interface, value v)
