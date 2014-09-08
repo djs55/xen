@@ -630,7 +630,7 @@ def run_grub(file, entry, fs, cfg_args):
         sys.exit(1)
 
     try:
-        img = g.cf.images[sel]
+        img = g.cf.images[int(sel)]
     except IndexError:
         img = g.cf.images[0]
 
