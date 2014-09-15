@@ -3408,7 +3408,7 @@ int libxl__init_console_from_channel(libxl__gc *gc,
             /* We've forgotten to add the clause */
             LOG(ERROR, "%s: missing implementation for channel connection %d",
                 __func__, channel->connection);
-            return ERROR_INVAL;
+            abort();
     }
 
     return 0;
