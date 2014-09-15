@@ -3274,7 +3274,9 @@ int libxl__device_console_add(libxl__gc *gc, uint32_t domid,
     flexarray_t *back;
     int rc;
 
-    if (console->devid && state) {
+    if (console->devid &&
+       (state || console->name || console->connection || console->path)) {
+        LOG(ERROR, "Primary console has invalid configuration");
         rc = ERROR_INVAL;
         goto out;
     }
