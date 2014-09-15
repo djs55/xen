@@ -3361,8 +3361,7 @@ int libxl__init_console_from_channel(libxl__gc *gc,
     console->devid = dev_num;
     console->consback = LIBXL__CONSOLE_BACKEND_IOEMU;
     if (!channel->name){
-        LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
-                   "channel %d has no name", channel->devid);
+        LOG(ERROR, "channel %d has no name", channel->devid);
         return ERROR_INVAL;
     }
     console->name = libxl__strdup(NOGC, channel->name);
@@ -3385,9 +3384,8 @@ int libxl__init_console_from_channel(libxl__gc *gc,
 
     switch (channel->connection) {
         case LIBXL_CHANNEL_CONNECTION_UNKNOWN:
-            LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
-                       "channel %d has no defined connection; "
-                       "to where should it be connected?", channel->devid);
+            LOG(ERROR, "channel %d has no defined connection; "
+                "to where should it be connected?", channel->devid);
             return ERROR_INVAL;
         case LIBXL_CHANNEL_CONNECTION_PTY:
             console->connection = libxl__strdup(NOGC, "pty");
@@ -3396,8 +3394,7 @@ int libxl__init_console_from_channel(libxl__gc *gc,
         case LIBXL_CHANNEL_CONNECTION_SOCKET:
             console->connection = libxl__strdup(NOGC, "socket");
             if (!channel->u.socket.path) {
-                LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
-                           "channel %d has no path", channel->devid);
+                LOG(ERROR, "channel %d has no path", channel->devid);
                 return ERROR_INVAL;
             }
             console->path = libxl__strdup(NOGC, channel->u.socket.path);
@@ -3505,7 +3502,7 @@ libxl_device_channel *libxl_device_channel_list(libxl_ctx *ctx,
     return channels;
 
 out_err:
-    LIBXL__LOG(ctx, LIBXL__LOG_ERROR, "Unable to list channels");
+    LOG(ERROR, "Unable to list channels");
     while (*num) {
         (*num)--;
         libxl_device_channel_dispose(&channels[*num]);
