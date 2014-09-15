@@ -35,9 +35,14 @@ concept with the same name and purpose. The file "channels.txt" describes
 how to use channels and includes a registry of well-known channel names.
 
 The toolstack writes 'connection' information in the xenstore backend in
-nodes: "connection", "path" and "output". The nodes "connection" and "path"
-express the high-level intention, while the "output" node is used for
-internal signalling between the toolstack and the implementation daemon.
+the keys
+* connection: either 'pty' or 'socket'
+* path: only present if connection = 'socket', the path of the socket to
+  glue the channel to
+
+An artifact of the current implementation, the toolstack will write an
+extra backend key
+* output: an identifier only meaningful for qemu/xenconsoled
 
 If the toolstack wants the console to be connected to a pty, it will write
 to the backend:
@@ -54,6 +59,9 @@ If the toolstack wants a listening Unix domain socket to be created at path
 connection = socket
 path = <path>
 output = chardev:<some internal identifier>
+
+where chardev:<some internal identifier> matches a qemu character device
+configured on the qemu command-line.
 
 The backend implementation daemon chosen for a particular console is specified
 by the toolstack in the "type" node in the xenstore frontend.
