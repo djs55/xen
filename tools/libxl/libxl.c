@@ -3431,7 +3431,7 @@ static int libxl__device_channel_from_xs_be(libxl__gc *gc,
         channel->connection = LIBXL_CHANNEL_CONNECTION_SOCKET;
         channel->u.socket.path = READ_BACKEND(NOGC, "path");
     } else {
-	rc = ERROR_INVAL;
+        rc = ERROR_INVAL;
         goto out;
     }
 
