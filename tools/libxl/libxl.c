@@ -21,6 +21,15 @@
 #define PAGE_TO_MEMKB(pages) ((pages) * 4)
 #define BACKEND_STRING_SIZE 5
 
+/* Utility to read backend xenstore keys */
+#define READ_BACKEND(tgc, subpath) ({                                   \
+        rc = libxl__xs_read_checked(tgc, XBT_NULL,                      \
+                                    GCSPRINTF("%s/" subpath, be_path),  \
+                                    &tmp);                              \
+        if (rc) goto out;                                               \
+        (char*)tmp;                                                     \
+    });
+
 int libxl_ctx_alloc(libxl_ctx **pctx, int version,
                     unsigned flags, xentoollog_logger * lg)
 {
@@ -3084,14 +3093,6 @@ static int libxl__device_nic_from_xs_be(libxl__gc *gc,
     int rc;
 
     libxl_device_nic_init(nic);
-
-#define READ_BACKEND(tgc, subpath) ({                                   \
-        rc = libxl__xs_read_checked(tgc, XBT_NULL,                      \
-                                    GCSPRINTF("%s/" subpath, be_path),  \
-                                    &tmp);                              \
-        if (rc) goto out;                                               \
-        (char*)tmp;                                                     \
-    });
 
     tmp = READ_BACKEND(gc, "handle");
     if (tmp)
