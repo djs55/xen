@@ -109,15 +109,22 @@ void arch_init_demand_mapping_area(unsigned long cur_pfn)
 
 unsigned long allocate_ondemand(unsigned long n, unsigned long alignment)
 {
-    int i, j;
+    int i, j, found;
     unsigned long addr;
     if (alignment != 1) {
         printk("allocate_ondemand: we only support alignment = 1 (was: %ld)\n", alignment);
         BUG();
     }
     for (i = 0, j = 0; i < DEMAND_MAP_PAGES - n; i += j+1 ) {
+        /* Is the contiguous section free? */
+	found = 0;
         for (j = 0; j < n; j++ )
-          if (!demand_map_area_free[i+j]) break;
+          if (!demand_map_area_free[i+j]) {
+              found = 1;
+	      break;
+	  }
+	if (found) break;
+        /* It's free, so allocate it. */
 	for (j = 0; j < n; j++ )
           demand_map_area_free[i+j] = 0;
         addr = demand_map_area_start + i * PAGE_SIZE;
