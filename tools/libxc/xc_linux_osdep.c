@@ -105,8 +105,7 @@ static void *linux_privcmd_alloc_hypercall_buffer(xc_interface *xch, xc_osdep_ha
 static void linux_privcmd_free_hypercall_buffer(xc_interface *xch, xc_osdep_handle h, void *ptr, int npages)
 {
     /* Recover the VMA flags. Maybe it's not necessary */
-    madvise(ptr, npages * XC_PAGE_SIZE, MADV_DOFORK);
-
+    /* madvise(ptr, npages * XC_PAGE_SIZE, MADV_DOFORK); */
     munmap(ptr, npages * XC_PAGE_SIZE);
 }
 
