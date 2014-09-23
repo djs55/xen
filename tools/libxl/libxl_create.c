@@ -1149,7 +1149,8 @@ static void domcreate_launch_dm(libxl__egc *egc, libxl__multidev *multidev,
                 d_config->num_disks, &d_config->disks[0]);
 
         console.backend_domid = state->console_domid;
-        libxl__device_console_add(gc, domid, &console, state);
+        //libxl__device_console_add(gc, domid, &console, state);
+        LOG(DEBUG, "libxl__device_console_add skipped");
         libxl__device_console_dispose(&console);
 
         if (need_qemu) {
