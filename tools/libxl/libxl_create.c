@@ -789,6 +789,10 @@ static void initiate_domain_create(libxl__egc *egc,
         if (d_config->nics[i].devid < 0)
             d_config->nics[i].devid = ++last_devid;
     }
+    // FIXME: let's get the nic party started
+    for (i = 0; i < d_config->num_nics; i++)
+        libxl__device_nic_prepare(gc, domid, &d_config->nics[i]);
+
 
     if (restore_fd >= 0) {
         LOG(DEBUG, "restoring, not running bootloader\n");

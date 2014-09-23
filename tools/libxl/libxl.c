@@ -2886,11 +2886,9 @@ static int libxl__device_from_nic(libxl__gc *gc, uint32_t domid,
     return 0;
 }
 
-extern char hotplug_vif[100];
-void libxl__device_nic_add(libxl__egc *egc, uint32_t domid,
-                           libxl_device_nic *nic, libxl__ao_device *aodev)
+void libxl__device_nic_prepare(libxl__gc *gc, uint32_t domid,
+                               libxl_device_nic *nic)
 {
-    STATE_AO_GC(aodev->ao);
     flexarray_t *front;
     flexarray_t *back;
     libxl__device *device;
@@ -2970,9 +2968,111 @@ void libxl__device_nic_add(libxl__egc *egc, uint32_t domid,
                               libxl__xs_kvs_of_flexarray(gc, front, front->count),
                               NULL);
 
+    rc = 0;
+out:
+    return;
+}
+
+extern char hotplug_vif[100];
+void libxl__device_nic_add(libxl__egc *egc, uint32_t domid,
+                           libxl_device_nic *nic, libxl__ao_device *aodev)
+{
+    STATE_AO_GC(aodev->ao);
+    flexarray_t *front;
+    flexarray_t *back;
+    libxl__device *device;
+    unsigned int rc;
+
+    rc = libxl__device_nic_setdefault(gc, nic, domid);
+    if (rc) goto out;
+
+    front = flexarray_make(gc, 16, 1);
+    back = flexarray_make(gc, 18, 1);
+
+    if (nic->devid == -1) {
+        if ((nic->devid = libxl__device_nextid(gc, domid, "vif")) < 0) {
+            rc = ERROR_FAIL;
+            goto out;
+        }
+    }
+
+    GCNEW(device);
+    rc = libxl__device_from_nic(gc, domid, nic, device);
+    if ( rc != 0 ) goto out;
+
+    flexarray_append(back, "frontend-id");
+    flexarray_append(back, libxl__sprintf(gc, "%d", domid));
+    flexarray_append(back, "online");
+    flexarray_append(back, "1");
+    flexarray_append(back, "state");
+    flexarray_append(back, libxl__sprintf(gc, "%d", 1));
+    if (nic->script)
+        flexarray_append_pair(back, "script",
+                              libxl__abs_path(gc, nic->script,
+                                              libxl__xen_script_dir_path()));
+
+    if (nic->ifname) {
+        flexarray_append(back, "vifname");
+        flexarray_append(back, nic->ifname);
+    }
+
+    flexarray_append(back, "mac");
+    flexarray_append(back,libxl__sprintf(gc,
+                                    LIBXL_MAC_FMT, LIBXL_MAC_BYTES(nic->mac)));
+    if (nic->ip) {
+        flexarray_append(back, "ip");
+        flexarray_append(back, libxl__strdup(gc, nic->ip));
+    }
+    if (nic->gatewaydev) {
+        flexarray_append(back, "gatewaydev");
+        flexarray_append(back, libxl__strdup(gc, nic->gatewaydev));
+    }
+
+    if (nic->rate_interval_usecs > 0) {
+        flexarray_append(back, "rate");
+        flexarray_append(back, libxl__sprintf(gc, "%"PRIu64",%"PRIu32"",
+                            nic->rate_bytes_per_interval,
+                            nic->rate_interval_usecs));
+    }
+
+    flexarray_append(back, "bridge");
+    flexarray_append(back, libxl__strdup(gc, nic->bridge));
+    flexarray_append(back, "handle");
+    flexarray_append(back, libxl__sprintf(gc, "%d", nic->devid));
+    flexarray_append(back, "type");
+    flexarray_append(back, libxl__strdup(gc,
+                                     libxl_nic_type_to_string(nic->nictype)));
+
+    flexarray_append(front, "backend-id");
+    flexarray_append(front, libxl__sprintf(gc, "%d", nic->backend_domid));
+    flexarray_append(front, "state");
+    flexarray_append(front, libxl__sprintf(gc, "%d", 1));
+    flexarray_append(front, "handle");
+    flexarray_append(front, libxl__sprintf(gc, "%d", nic->devid));
+    flexarray_append(front, "mac");
+    flexarray_append(front, libxl__sprintf(gc,
+                                    LIBXL_MAC_FMT, LIBXL_MAC_BYTES(nic->mac)));
+    //libxl__device_generic_add(gc, XBT_NULL, device,
+    //                          libxl__xs_kvs_of_flexarray(gc, back, back->count),
+    //                          libxl__xs_kvs_of_flexarray(gc, front, front->count),
+    //                          NULL);
     aodev->dev = device;
     aodev->action = LIBXL__DEVICE_ACTION_ADD;
     sprintf(hotplug_vif,"vif%u.%d",domid, nic->devid);
+    {
+       char *be = libxl__device_backend_path(gc, device);
+       char *state_path = libxl__sprintf(gc, "%s/state", be);
+       char *state = libxl__xs_read(gc, XBT_NULL, state_path);
+       libxl_ctx *ctx = libxl__gc_owner(gc);
+       LOG(DEBUG, "xenstore-read %s = %s", state_path, state);
+       if (atoi(state) == 2) {
+         hotplug_vif_noscript();
+         xc_domain_unpause(ctx->xch, domid);
+         LOG(DEBUG, "domain is unpaused; bailing out"); 
+         exit(0);
+       }
+    }
+
     libxl__wait_device_connection(egc, aodev);
 
     rc = 0;

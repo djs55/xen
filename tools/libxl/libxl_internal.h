@@ -2076,6 +2076,8 @@ _hidden void libxl__device_disk_add(libxl__egc *egc, uint32_t domid,
                                     libxl__ao_device *aodev);
 
 /* AO operation to connect a nic device */
+_hidden void libxl__device_nic_prepare(libxl__gc *gc, uint32_t domid,
+                                       libxl_device_nic *nic);
 _hidden void libxl__device_nic_add(libxl__egc *egc, uint32_t domid,
                                    libxl_device_nic *nic,
                                    libxl__ao_device *aodev);
