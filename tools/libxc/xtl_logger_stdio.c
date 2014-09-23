@@ -23,6 +23,7 @@
 
 #include "xentoollog.h"
 
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 #include <string.h>
@@ -55,6 +56,26 @@ static void stdiostream_vmessage(xentoollog_logger *logger_in,
         return;
 
     progress_erase(lg);
+
+    {
+        static struct timeval start;
+        static int started = 0;
+        struct timeval tv;
+        long long secs;
+        int usecs;
+        if (started == 0) {
+            gettimeofday(&start, NULL);
+            started = 1;
+        }
+        gettimeofday(&tv, NULL);
+        secs = (long long)tv.tv_sec - (long long)start.tv_sec;
+        usecs  = (int)tv.tv_usec - (int)start.tv_usec;
+        if (usecs < 0) {
+            secs--;
+            usecs+=1000000;
+        };
+        fprintf(lg->f, "%lld . %06d ", secs, usecs);
+    }
 
     if (lg->flags & XTL_STDIOSTREAM_SHOW_DATE) {
         struct tm lt_buf;
