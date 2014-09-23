@@ -855,6 +855,7 @@ int libxl_domain_unpause(libxl_ctx *ctx, uint32_t domid)
         LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "unpausing domain %d", domid);
         rc = ERROR_FAIL;
     }
+    LOG(DEBUG, "domain is unpaused; bailing out");
  out:
     GC_FREE;
     return rc;
