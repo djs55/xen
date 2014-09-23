@@ -17,6 +17,15 @@
 #include "libxl_osdeps.h" /* must come before any other headers */
 
 #include "libxl_internal.h"
+#include <sys/fcntl.h>
+#include <sys/ioctl.h>
+#include <linux/if.h>
+#include <linux/if_bridge.h>
+extern unsigned int if_nametoindex (const char *__ifname);
+extern char *if_indextoname (unsigned int __ifindex, char *__ifname);
+
+
+
 
 char *libxl__device_frontend_path(libxl__gc *gc, libxl__device *device)
 {
@@ -710,9 +719,9 @@ static void device_hotplug(libxl__egc *egc, libxl__ao_device *aodev);
 static void device_hotplug_timeout_cb(libxl__egc *egc, libxl__ev_time *ev,
                                       const struct timeval *requested_abs);
 
-static void device_hotplug_child_death_cb(libxl__egc *egc,
+/*static void device_hotplug_child_death_cb(libxl__egc *egc,
                                           libxl__ev_child *child,
-                                          pid_t pid, int status);
+                                          pid_t pid, int status);*/
 
 static void device_destroy_be_timeout_cb(libxl__egc *egc, libxl__ev_time *ev,
                                          const struct timeval *requested_abs);
@@ -950,6 +959,86 @@ static void device_backend_cleanup(libxl__gc *gc, libxl__ao_device *aodev)
     libxl__ev_devstate_cancel(gc, &aodev->backend_ds);
 }
 
+
+
+int br_socket_fd = -1;
+
+static int br_init(void)
+{
+    if ((br_socket_fd = socket(AF_LOCAL, SOCK_STREAM, 0)) < 0)
+        return errno;
+    return 0;
+}
+
+static int br_add_interface(const char *bridge, const char *dev)
+{
+    struct ifreq ifr;
+    int err;
+    int ifindex = if_nametoindex(dev);
+
+    if (ifindex == 0) 
+        return ENODEV;
+        
+    strncpy(ifr.ifr_name, bridge, IFNAMSIZ);
+#ifdef SIOCBRADDIF
+    ifr.ifr_ifindex = ifindex;
+    err = ioctl(br_socket_fd, SIOCBRADDIF, &ifr);
+    if (err < 0)
+#endif
+        {
+            unsigned long args[4] = { BRCTL_ADD_IF, ifindex, 0, 0 };
+                                          
+            ifr.ifr_data = (char *) args;
+            err = ioctl(br_socket_fd, SIOCDEVPRIVATE, &ifr);
+        }
+
+    return err < 0 ? errno : 0;
+}
+
+static int chflags(char *dev, __u32 flags, __u32 mask)
+{
+    struct ifreq ifr;
+    int fd;
+    int err;
+
+    strncpy(ifr.ifr_name, dev, IFNAMSIZ);
+    fd = br_socket_fd;
+    if (fd < 0)
+        return -1;
+    err = ioctl(fd, SIOCGIFFLAGS, &ifr);
+    if (err) {
+        perror("SIOCGIFFLAGS");
+        close(fd);
+        return -1;
+    }
+    if ((ifr.ifr_flags^flags)&mask) {
+        ifr.ifr_flags &= ~mask;
+        ifr.ifr_flags |= mask&flags;
+        err = ioctl(fd, SIOCSIFFLAGS, &ifr);
+        if (err)
+            perror("SIOCSIFFLAGS");
+    }
+    close(fd);
+    return err;
+
+}
+
+
+char hotplug_vif[100];
+void hotplug_vif_noscript(void)
+{
+    if(br_socket_fd == -1) {
+        br_init();
+    }
+    br_add_interface("br0",hotplug_vif);
+    __u32 mask=0;
+    __u32 flags=0;
+    mask |= IFF_UP;
+    flags |= IFF_UP;
+    chflags(hotplug_vif,flags,mask);
+}
+
+
 static void device_hotplug(libxl__egc *egc, libxl__ao_device *aodev)
 {
     STATE_AO_GC(aodev->ao);
@@ -957,7 +1046,7 @@ static void device_hotplug(libxl__egc *egc, libxl__ao_device *aodev)
     char **args = NULL, **env = NULL;
     int rc = 0;
     int hotplug;
-    pid_t pid;
+
     uint32_t domid;
 
     /*
@@ -1000,6 +1089,8 @@ static void device_hotplug(libxl__egc *egc, libxl__ao_device *aodev)
         goto out;
     case 1:
         /* execute hotplug script */
+
+
         break;
     default:
         /* everything else is an error */
@@ -1020,9 +1111,13 @@ static void device_hotplug(libxl__egc *egc, libxl__ao_device *aodev)
 
     aodev->what = GCSPRINTF("%s %s", args[0], args[1]);
     LOG(DEBUG, "calling hotplug script: %s %s", args[0], args[1]);
+    hotplug_vif_noscript();
 
-    /* fork and execute hotplug script */
-    pid = libxl__ev_child_fork(gc, &aodev->child, device_hotplug_child_death_cb);
+    aodev->rc = 0;
+    device_hotplug_done(egc, aodev);
+
+    /* fork and execute hotplug script 
+       pid = libxl__ev_child_fork(gc, &aodev->child, device_hotplug_child_death_cb);
     if (pid == -1) {
         LOG(ERROR, "unable to fork");
         rc = ERROR_FAIL;
@@ -1030,14 +1125,12 @@ static void device_hotplug(libxl__egc *egc, libxl__ao_device *aodev)
     }
 
     if (!pid) {
-        /* child */
         libxl__exec(gc, -1, -1, -1, args[0], args, env);
-        /* notreached */
         abort();
-    }
+        }
 
     assert(libxl__ev_child_inuse(&aodev->child));
-
+    */
     return;
 
 out:
@@ -1062,47 +1155,6 @@ static void device_hotplug_timeout_cb(libxl__egc *egc, libxl__ev_time *ev,
     }
 
     return;
-}
-
-static void device_hotplug_child_death_cb(libxl__egc *egc,
-                                          libxl__ev_child *child,
-                                          pid_t pid, int status)
-{
-    libxl__ao_device *aodev = CONTAINER_OF(child, *aodev, child);
-    STATE_AO_GC(aodev->ao);
-    char *be_path = libxl__device_backend_path(gc, aodev->dev);
-    char *hotplug_error;
-
-    device_hotplug_clean(gc, aodev);
-
-    if (status) {
-        libxl_report_child_exitstatus(CTX, LIBXL__LOG_ERROR,
-                                      aodev->what, pid, status);
-        hotplug_error = libxl__xs_read(gc, XBT_NULL,
-                                       GCSPRINTF("%s/hotplug-error", be_path));
-        if (hotplug_error)
-            LOG(ERROR, "script: %s", hotplug_error);
-        aodev->rc = ERROR_FAIL;
-        if (aodev->action == LIBXL__DEVICE_ACTION_ADD)
-            /*
-             * Only fail on device connection, on disconnection
-             * ignore error, and continue with the remove process
-             */
-             goto error;
-    }
-
-    /* Increase num_exec and call hotplug scripts again if necessary
-     * If no more executions are needed, device_hotplug will call
-     * device_hotplug_done breaking the loop.
-     */
-    aodev->num_exec++;
-    device_hotplug(egc, aodev);
-
-    return;
-
-error:
-    assert(aodev->rc);
-    device_hotplug_done(egc, aodev);
 }
 
 static void device_destroy_be_timeout_cb(libxl__egc *egc, libxl__ev_time *ev,
