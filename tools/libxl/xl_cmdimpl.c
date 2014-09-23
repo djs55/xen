@@ -86,7 +86,6 @@ xlchild children[child_max];
 
 #define INVALID_DOMID ~0
 static const char *common_domname;
-static int fd_lock = -1;
 
 /* Stash for specific vcpu to pcpu mappping */
 static int *vcpu_to_pcpu;
@@ -242,7 +241,8 @@ static void autoconnect_vncviewer(uint32_t domid, int autopass)
     vncviewer(domid, autopass);
     _exit(1);
 }
-
+#ifdef USE_LOCK
+static int fd_lock = -1;
 static int acquire_lock(void)
 {
     int rc;
@@ -306,7 +306,7 @@ release_lock:
 
     return rc;
 }
-
+#endif
 static void *xmalloc(size_t sz) {
     void *r;
     r = malloc(sz);
@@ -2219,7 +2219,7 @@ static uint32_t create_domain(struct domain_create *dom_info)
 start:
     assert(domid == INVALID_DOMID);
 
-    rc = acquire_lock();
+    //rc = acquire_lock();
     if (rc < 0)
         goto error_out;
 
@@ -2291,12 +2291,12 @@ start:
         ret = ERROR_FAIL;
         goto error_out;
     }
-
-    release_lock();
+    
+    //release_lock();
 
     if (!paused)
         libxl_domain_unpause(ctx, domid);
-
+    if (paused) exit(0);
     ret = domid; /* caller gets success in parent */
     if (!daemonize && !monitor)
         goto out;
@@ -2433,7 +2433,7 @@ start:
     }
 
 error_out:
-    release_lock();
+    //release_lock();
     if (libxl_domid_valid_guest(domid)) {
         libxl_domain_destroy(ctx, domid, 0);
         domid = INVALID_DOMID;
