@@ -460,12 +460,16 @@ static void *read_reply(
 	return body;
 }
 
+const int DONT_IGNORE_THIS_REQID = 0;
+const int IGNORE_THIS_REQID = 1;
+
 /* Send message to xs, get malloc'ed reply.  NULL and set errno on error. */
 static void *xs_talkv(struct xs_handle *h, xs_transaction_t t,
 		      enum xsd_sockmsg_type type,
 		      const struct iovec *iovec,
 		      unsigned int num_vecs,
-		      unsigned int *len)
+		      unsigned int *len,
+		      unsigned int ignore_result)
 {
 	struct xsd_sockmsg msg;
 	void *ret = NULL;
@@ -474,7 +478,7 @@ static void *xs_talkv(struct xs_handle *h, xs_transaction_t t,
 	struct sigaction ignorepipe, oldact;
 
 	msg.tx_id = t;
-	msg.req_id = 0;
+	msg.req_id = ignore_result?IGNORE_THIS_REQID:DONT_IGNORE_THIS_REQID;
 	msg.type = type;
 	msg.len = 0;
 	for (i = 0; i < num_vecs; i++)
@@ -498,11 +502,15 @@ static void *xs_talkv(struct xs_handle *h, xs_transaction_t t,
 	for (i = 0; i < num_vecs; i++)
 		if (!xs_write_all(h->fd, iovec[i].iov_base, iovec[i].iov_len))
 			goto fail;
-
+	if (ignore_result) {
+	        mutex_unlock(&h->request_mutex);
+		ret = malloc(1);
+		*(char*)ret = 'Y';
+		return ret;
+	}
 	ret = read_reply(h, &msg.type, len);
 	if (!ret)
 		goto fail;
-
 	mutex_unlock(&h->request_mutex);
 
 	sigaction(SIGPIPE, &oldact, NULL);
@@ -544,13 +552,14 @@ static void free_no_errno(void *p)
 static void *xs_single(struct xs_handle *h, xs_transaction_t t,
 		       enum xsd_sockmsg_type type,
 		       const char *string,
-		       unsigned int *len)
+		       unsigned int *len,
+		       unsigned int ignore_result)
 {
 	struct iovec iovec;
 
 	iovec.iov_base = (void *)string;
 	iovec.iov_len = strlen(string) + 1;
-	return xs_talkv(h, t, type, &iovec, 1, len);
+	return xs_talkv(h, t, type, &iovec, 1, len, ignore_result);
 }
 
 static bool xs_bool(char *reply)
@@ -567,7 +576,7 @@ char **xs_directory(struct xs_handle *h, xs_transaction_t t,
 	char *strings, *p, **ret;
 	unsigned int len;
 
-	strings = xs_single(h, t, XS_DIRECTORY, path, &len);
+	strings = xs_single(h, t, XS_DIRECTORY, path, &len, 0);
 	if (!strings)
 		return NULL;
 
@@ -596,7 +605,7 @@ char **xs_directory(struct xs_handle *h, xs_transaction_t t,
 void *xs_read(struct xs_handle *h, xs_transaction_t t,
 	      const char *path, unsigned int *len)
 {
-	return xs_single(h, t, XS_READ, path, len);
+	return xs_single(h, t, XS_READ, path, len, 0);
 }
 
 /* Write the value of a single file.
@@ -613,7 +622,7 @@ bool xs_write(struct xs_handle *h, xs_transaction_t t,
 	iovec[1].iov_len = len;
 
 	return xs_bool(xs_talkv(h, t, XS_WRITE, iovec,
-				ARRAY_SIZE(iovec), NULL));
+				ARRAY_SIZE(iovec), NULL, 1));
 }
 
 /* Create a new directory.
@@ -622,7 +631,7 @@ bool xs_write(struct xs_handle *h, xs_transaction_t t,
 bool xs_mkdir(struct xs_handle *h, xs_transaction_t t,
 	      const char *path)
 {
-	return xs_bool(xs_single(h, t, XS_MKDIR, path, NULL));
+	return xs_bool(xs_single(h, t, XS_MKDIR, path, NULL, 1));
 }
 
 /* Destroy a file or directory (directories must be empty).
@@ -631,7 +640,7 @@ bool xs_mkdir(struct xs_handle *h, xs_transaction_t t,
 bool xs_rm(struct xs_handle *h, xs_transaction_t t,
 	   const char *path)
 {
-	return xs_bool(xs_single(h, t, XS_RM, path, NULL));
+	return xs_bool(xs_single(h, t, XS_RM, path, NULL, 1));
 }
 
 /* Get permissions of node (first element is owner).
@@ -645,7 +654,7 @@ struct xs_permissions *xs_get_permissions(struct xs_handle *h,
 	unsigned int len;
 	struct xs_permissions *ret;
 
-	strings = xs_single(h, t, XS_GET_PERMS, path, &len);
+	strings = xs_single(h, t, XS_GET_PERMS, path, &len, 0);
 	if (!strings)
 		return NULL;
 
@@ -695,7 +704,7 @@ bool xs_set_permissions(struct xs_handle *h,
 			goto unwind;
 	}
 
-	if (!xs_bool(xs_talkv(h, t, XS_SET_PERMS, iov, 1+num_perms, NULL)))
+	if (!xs_bool(xs_talkv(h, t, XS_SET_PERMS, iov, 1+num_perms, NULL, 1)))
 		goto unwind;
 	for (i = 0; i < num_perms; i++)
 		free(iov[i+1].iov_base);
@@ -713,7 +722,7 @@ bool xs_restrict(struct xs_handle *h, unsigned domid)
 	char buf[16];
 
 	sprintf(buf, "%d", domid);
-	return xs_bool(xs_single(h, XBT_NULL, XS_RESTRICT, buf, NULL));
+	return xs_bool(xs_single(h, XBT_NULL, XS_RESTRICT, buf, NULL, 0));
 }
 
 /* Watch a node for changes (poll on fd to detect, or call read_watch()).
@@ -766,7 +775,7 @@ bool xs_watch(struct xs_handle *h, const char *path, const char *token)
 	iov[1].iov_len = strlen(token) + 1;
 
 	return xs_bool(xs_talkv(h, XBT_NULL, XS_WATCH, iov,
-				ARRAY_SIZE(iov), NULL));
+				ARRAY_SIZE(iov), NULL, 1));
 }
 
 
@@ -892,7 +901,7 @@ bool xs_unwatch(struct xs_handle *h, const char *path, const char *token)
 	iov[1].iov_len = strlen(token) + 1;
 
 	res = xs_bool(xs_talkv(h, XBT_NULL, XS_UNWATCH, iov,
-			       ARRAY_SIZE(iov), NULL));
+			       ARRAY_SIZE(iov), NULL,0));
 
 	if (!h->unwatch_filter) /* Don't filter the watch list */
 		return res;
@@ -949,7 +958,7 @@ xs_transaction_t xs_transaction_start(struct xs_handle *h)
 	char *id_str;
 	xs_transaction_t id;
 
-	id_str = xs_single(h, XBT_NULL, XS_TRANSACTION_START, "", NULL);
+	id_str = xs_single(h, XBT_NULL, XS_TRANSACTION_START, "", NULL, 0);
 	if (id_str == NULL)
 		return XBT_NULL;
 
@@ -974,7 +983,7 @@ bool xs_transaction_end(struct xs_handle *h, xs_transaction_t t,
 	else
 		strcpy(abortstr, "T");
 	
-	return xs_bool(xs_single(h, t, XS_TRANSACTION_END, abortstr, NULL));
+	return xs_bool(xs_single(h, t, XS_TRANSACTION_END, abortstr, NULL, 0));
 }
 
 /* Introduce a new domain.
@@ -1002,7 +1011,7 @@ bool xs_introduce_domain(struct xs_handle *h,
 	iov[2].iov_len = strlen(eventchn_str) + 1;
 
 	return xs_bool(xs_talkv(h, XBT_NULL, XS_INTRODUCE, iov,
-				ARRAY_SIZE(iov), NULL));
+				ARRAY_SIZE(iov), NULL,0));
 }
 
 bool xs_set_target(struct xs_handle *h,
@@ -1021,7 +1030,7 @@ bool xs_set_target(struct xs_handle *h,
 	iov[1].iov_len = strlen(target_str) + 1;
 
 	return xs_bool(xs_talkv(h, XBT_NULL, XS_SET_TARGET, iov,
-				ARRAY_SIZE(iov), NULL));
+				ARRAY_SIZE(iov), NULL,0));
 }
 
 static void * single_with_domid(struct xs_handle *h,
@@ -1032,7 +1041,7 @@ static void * single_with_domid(struct xs_handle *h,
 
 	snprintf(domid_str, sizeof(domid_str), "%u", domid);
 
-	return xs_single(h, XBT_NULL, type, domid_str, NULL);
+	return xs_single(h, XBT_NULL, type, domid_str, NULL, 0);
 }
 
 bool xs_release_domain(struct xs_handle *h, unsigned int domid)
@@ -1049,10 +1058,9 @@ bool xs_resume_domain(struct xs_handle *h, unsigned int domid)
 char *xs_get_domain_path(struct xs_handle *h, unsigned int domid)
 {
 	char domid_str[MAX_STRLEN(domid)];
-
 	snprintf(domid_str, sizeof(domid_str), "%u", domid);
 
-	return xs_single(h, XBT_NULL, XS_GET_DOMAIN_PATH, domid_str, NULL);
+	return xs_single(h, XBT_NULL, XS_GET_DOMAIN_PATH, domid_str, NULL, 0);
 }
 
 bool xs_path_is_subpath(const char *parent, const char *child)
@@ -1121,7 +1129,7 @@ char *xs_debug_command(struct xs_handle *h, const char *cmd,
 	iov[1].iov_len = len;
 
 	return xs_talkv(h, XBT_NULL, XS_DEBUG, iov,
-			ARRAY_SIZE(iov), NULL);
+			ARRAY_SIZE(iov), NULL,0);
 }
 
 static int read_message(struct xs_handle *h, int nonblocking)
@@ -1135,12 +1143,12 @@ static int read_message(struct xs_handle *h, int nonblocking)
 	 * whole amount requested.  Ie as soon as we have the start of
 	 * the message we block until we get all of it.
 	 */
-         
 	struct xs_stored_msg *msg = NULL;
 	char *body = NULL;
 	int saved_errno = 0;
 	int ret = -1;
 
+start:
 	/* Allocate message structure and read the message header. */
 	msg = malloc(sizeof(*msg));
 	if (msg == NULL)
@@ -1165,6 +1173,12 @@ static int read_message(struct xs_handle *h, int nonblocking)
 	if (!read_all(h->fd, body, msg->hdr.len, 0)) { /* Cancellation point */
 		saved_errno = errno;
 		goto error_freebody;
+	}
+
+	/* If we want to ignore this one, drop it now */
+	if (msg->hdr.req_id == IGNORE_THIS_REQID) {
+		/* FIXME: leak */
+		goto start;
 	}
 
 	body[msg->hdr.len] = '\0';
