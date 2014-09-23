@@ -15,8 +15,8 @@
 #include <crypto/vmac.h>
 
 /* tboot=<physical address of shared page> */
-static unsigned long __initdata opt_tboot_pa;
-integer_param("tboot", opt_tboot_pa);
+static char __initdata opt_tboot[20] = "";
+string_param("tboot", opt_tboot);
 
 /* Global pointer to shared data; NULL means no measured launch. */
 tboot_shared_t *g_tboot_shared;
@@ -93,13 +93,15 @@ static void __init tboot_copy_memory(unsigned char *va, uint32_t size,
 void __init tboot_probe(void)
 {
     tboot_shared_t *tboot_shared;
+    unsigned long p_tboot_shared;
 
     /* Look for valid page-aligned address for shared page. */
-    if ( !opt_tboot_pa || (opt_tboot_pa & ~PAGE_MASK) )
+    p_tboot_shared = simple_strtoul(opt_tboot, NULL, 0);
+    if ( (p_tboot_shared == 0) || ((p_tboot_shared & ~PAGE_MASK) != 0) )
         return;
 
     /* Map and check for tboot UUID. */
-    set_fixmap(FIX_TBOOT_SHARED_BASE, opt_tboot_pa);
+    set_fixmap(FIX_TBOOT_SHARED_BASE, p_tboot_shared);
     tboot_shared = (tboot_shared_t *)fix_to_virt(FIX_TBOOT_SHARED_BASE);
     if ( tboot_shared == NULL )
         return;
@@ -115,7 +117,7 @@ void __init tboot_probe(void)
     }
 
     g_tboot_shared = tboot_shared;
-    printk("TBOOT: found shared page at phys addr %#lx:\n", opt_tboot_pa);
+    printk("TBOOT: found shared page at phys addr %lx:\n", p_tboot_shared);
     printk("  version: %d\n", tboot_shared->version);
     printk("  log_addr: %#x\n", tboot_shared->log_addr);
     printk("  shutdown_entry: %#x\n", tboot_shared->shutdown_entry);
@@ -228,8 +230,7 @@ static void tboot_gen_domain_integrity(const uint8_t key[TB_KEY_SIZE],
         if ( !is_idle_domain(d) )
         {
             struct hvm_iommu *hd = domain_hvm_iommu(d);
-            update_iommu_mac(&ctx, hd->arch.pgd_maddr,
-                             agaw_to_level(hd->arch.agaw));
+            update_iommu_mac(&ctx, hd->pgd_maddr, agaw_to_level(hd->agaw));
         }
     }
 

@@ -641,11 +641,11 @@ static inline void insert_wrap_record(struct t_buf *buf,
 
 static inline void insert_lost_records(struct t_buf *buf)
 {
-    struct __packed {
+    struct {
         u32 lost_records;
-        u16 did, vid;
+        u32 did:16, vid:16;
         u64 first_tsc;
-    } ed;
+    } __attribute__((packed)) ed;
 
     ed.vid = current->vcpu_id;
     ed.did = current->domain->domain_id;
@@ -817,12 +817,12 @@ unlock:
 }
 
 void __trace_hypercall(uint32_t event, unsigned long op,
-                       const xen_ulong_t *args)
+                       const unsigned long *args)
 {
-    struct __packed {
+    struct {
         uint32_t op;
         uint32_t args[6];
-    } d;
+    } __attribute__((packed)) d;
     uint32_t *a = d.args;
 
 #define APPEND_ARG32(i)                         \

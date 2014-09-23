@@ -140,12 +140,12 @@ int globalinit = 0;
  * Duplicates are not allowed
  * **********************************/
 
-static void tpmif_req_ready(tpmif_t* tpmif) {
+inline void tpmif_req_ready(tpmif_t* tpmif) {
    tpmif->flags |= TPMIF_REQ_READY;
    gtpmdev.flags |= TPMIF_REQ_READY;
 }
 
-static void tpmdev_check_req(void) {
+inline void tpmdev_check_req(void) {
    int i;
    int flags;
    local_irq_save(flags);
@@ -160,7 +160,7 @@ static void tpmdev_check_req(void) {
    local_irq_restore(flags);
 }
 
-static void tpmif_req_finished(tpmif_t* tpmif) {
+inline void tpmif_req_finished(tpmif_t* tpmif) {
    tpmif->flags &= ~TPMIF_REQ_READY;
    tpmdev_check_req();
 }
@@ -332,7 +332,6 @@ error_post_irq:
  * returns 0 on success and non-zero on error */
 int tpmif_change_state(tpmif_t* tpmif, enum xenbus_state state)
 {
-   int tempst;
    char path[512];
    char *value;
    char *err;
@@ -348,12 +347,11 @@ int tpmif_change_state(tpmif_t* tpmif, enum xenbus_state state)
       free(err);
       return -1;
    }
-   if(sscanf(value, "%d", &tempst) != 1) {
+   if(sscanf(value, "%d", &readst) != 1) {
       TPMBACK_ERR("Non integer value (%s) in %s ??\n", value, path);
       free(value);
       return -1;
    }
-   readst = (enum xenbus_state) tempst;
    free(value);
 
    /* It's possible that the backend state got updated by hotplug or something else behind our back */
@@ -382,7 +380,7 @@ int tpmif_change_state(tpmif_t* tpmif, enum xenbus_state state)
 /**********************************
  * TPMIF CREATION AND DELETION
  * *******************************/
-static tpmif_t* __init_tpmif(domid_t domid, unsigned int handle)
+inline tpmif_t* __init_tpmif(domid_t domid, unsigned int handle)
 {
    tpmif_t* tpmif;
    tpmif = malloc(sizeof(*tpmif));

@@ -10,16 +10,16 @@
 #define E820_NVS          4
 #define E820_UNUSABLE     5
 
-struct __packed e820entry {
+struct e820entry {
     uint64_t addr;
     uint64_t size;
     uint32_t type;
-};
+} __attribute__((packed));
 
 #define E820MAX	128
 
 struct e820map {
-    unsigned int nr_map;
+    int nr_map;
     struct e820entry map[E820MAX];
 };
 

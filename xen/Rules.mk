@@ -47,7 +47,8 @@ CFLAGS += -pipe -g -D__XEN__ -include $(BASEDIR)/include/xen/config.h
 CFLAGS += -nostdinc
 
 CFLAGS-$(XSM_ENABLE)    += -DXSM_ENABLE
-CFLAGS-$(FLASK_ENABLE)  += -DFLASK_ENABLE
+CFLAGS-$(FLASK_ENABLE)  += -DFLASK_ENABLE -DXSM_MAGIC=0xf97cff8c
+CFLAGS-$(FLASK_ENABLE)  += -DFLASK_DEVELOP -DFLASK_BOOTPARAM -DFLASK_AVC_STATS
 CFLAGS-$(verbose)       += -DVERBOSE
 CFLAGS-$(crash_debug)   += -DCRASH_DEBUG
 CFLAGS-$(perfc)         += -DPERF_COUNTERS
@@ -167,12 +168,11 @@ _clean_%/: FORCE
 	$(CC) $(AFLAGS) -c $< -o $@
 
 SPECIAL_DATA_SECTIONS := rodata $(foreach n,1 2 4 8,rodata.str1.$(n)) \
-			 $(foreach r,rel rel.ro,data.$(r).local)
+			 $(foreach r,rel rel.ro,data.$(r) data.$(r).local)
 
 $(filter %.init.o,$(obj-y) $(obj-bin-y) $(extra-y)): %.init.o: %.o Makefile
-	$(OBJDUMP) -h $< | sed -n '/[0-9]/{s,00*,0,g;p;}' | while read idx name sz rest; do \
+	$(OBJDUMP) -h $< | sed -n '/[0-9]/{s,00*,0,g;p}' | while read idx name sz rest; do \
 		case "$$name" in \
-		.*.local) ;; \
 		.text|.text.*|.data|.data.*|.bss) \
 			test $$sz != 0 || continue; \
 			echo "Error: size of $<:$$name is 0x$$sz" >&2; \

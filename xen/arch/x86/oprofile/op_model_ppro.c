@@ -64,9 +64,9 @@ static void ppro_fill_in_addresses(struct op_msrs * const msrs)
 	int i;
 
 	for (i = 0; i < num_counters; i++)
-		msrs->counters[i].addr = MSR_P6_PERFCTR(i);
+		msrs->counters[i].addr = MSR_P6_PERFCTR0 + i;
 	for (i = 0; i < num_counters; i++)
-		msrs->controls[i].addr = MSR_P6_EVNTSEL(i);
+		msrs->controls[i].addr = MSR_P6_EVNTSEL0 + i;
 }
 
 
@@ -126,7 +126,7 @@ static void ppro_setup_ctrs(struct op_msrs const * const msrs)
 
 static int ppro_check_ctrs(unsigned int const cpu,
                            struct op_msrs const * const msrs,
-                           struct cpu_user_regs const * const regs)
+                           struct cpu_user_regs * const regs)
 {
 	u64 val;
 	int i;
@@ -211,11 +211,11 @@ static int ppro_is_arch_pmu_msr(u64 msr_index, int *type, int *index)
 		*index = msr_index - MSR_IA32_PERFCTR0;
 		return 1;
         }
-        if ( (msr_index >= MSR_P6_EVNTSEL(0)) &&
-            (msr_index < (MSR_P6_EVNTSEL(num_counters))) )
+        if ( (msr_index >= MSR_P6_EVNTSEL0) &&
+            (msr_index < (MSR_P6_EVNTSEL0 + num_counters)) )
         {
 		*type = MSR_TYPE_ARCH_CTRL;
-		*index = msr_index - MSR_P6_EVNTSEL(0);
+		*index = msr_index - MSR_P6_EVNTSEL0;
 		return 1;
         }
 

@@ -24,7 +24,6 @@
 #include <asm/irq.h>
 #include <asm/time.h>
 #include <asm/gic.h>
-#include <asm/vgic.h>
 #include <asm/regs.h>
 
 extern s_time_t ticks_to_ns(uint64_t ticks);
@@ -35,17 +34,17 @@ static void phys_timer_expired(void *data)
     struct vtimer *t = data;
     t->ctl |= CNTx_CTL_PENDING;
     if ( !(t->ctl & CNTx_CTL_MASK) )
-        vgic_vcpu_inject_irq(t->v, t->irq);
+        vgic_vcpu_inject_irq(t->v, t->irq, 1);
 }
 
 static void virt_timer_expired(void *data)
 {
     struct vtimer *t = data;
     t->ctl |= CNTx_CTL_MASK;
-    vgic_vcpu_inject_irq(t->v, t->irq);
+    vgic_vcpu_inject_irq(t->v, t->irq, 1);
 }
 
-int domain_vtimer_init(struct domain *d)
+int vcpu_domain_init(struct domain *d)
 {
     d->arch.phys_timer_base.offset = NOW();
     d->arch.virt_timer_base.offset = READ_SYSREG64(CNTPCT_EL0);
@@ -55,18 +54,17 @@ int domain_vtimer_init(struct domain *d)
 int vcpu_vtimer_init(struct vcpu *v)
 {
     struct vtimer *t = &v->arch.phys_timer;
-    bool_t d0 = is_hardware_domain(v->domain);
+    bool_t d0 = (v->domain == dom0);
 
     /*
-     * Hardware domain uses the hardware interrupts, guests get the virtual
-     * platform.
+     * Domain 0 uses the hardware interrupts, guests get the virtual platform.
      */
 
     init_timer(&t->timer, phys_timer_expired, t, v->processor);
     t->ctl = 0;
     t->cval = NOW();
     t->irq = d0
-        ? timer_get_irq(TIMER_PHYS_NONSECURE_PPI)
+        ? timer_dt_irq(TIMER_PHYS_NONSECURE_PPI)->irq
         : GUEST_TIMER_PHYS_NS_PPI;
     t->v = v;
 
@@ -74,27 +72,23 @@ int vcpu_vtimer_init(struct vcpu *v)
     init_timer(&t->timer, virt_timer_expired, t, v->processor);
     t->ctl = 0;
     t->irq = d0
-        ? timer_get_irq(TIMER_VIRT_PPI)
+        ? timer_dt_irq(TIMER_VIRT_PPI)->irq
         : GUEST_TIMER_VIRT_PPI;
     t->v = v;
-
-    v->arch.vtimer_initialized = 1;
 
     return 0;
 }
 
 void vcpu_timer_destroy(struct vcpu *v)
 {
-    if ( !v->arch.vtimer_initialized )
-        return;
-
     kill_timer(&v->arch.virt_timer.timer);
     kill_timer(&v->arch.phys_timer.timer);
 }
 
 int virt_timer_save(struct vcpu *v)
 {
-    ASSERT(!is_idle_vcpu(v));
+    if ( is_idle_domain(v->domain) )
+        return 0;
 
     v->arch.virt_timer.ctl = READ_SYSREG32(CNTV_CTL_EL0);
     WRITE_SYSREG32(v->arch.virt_timer.ctl & ~CNTx_CTL_ENABLE, CNTV_CTL_EL0);
@@ -110,7 +104,8 @@ int virt_timer_save(struct vcpu *v)
 
 int virt_timer_restore(struct vcpu *v)
 {
-    ASSERT(!is_idle_vcpu(v));
+    if ( is_idle_domain(v->domain) )
+        return 0;
 
     stop_timer(&v->arch.virt_timer.timer);
     migrate_timer(&v->arch.virt_timer.timer, v->processor);
@@ -271,16 +266,16 @@ int vtimer_emulate(struct cpu_user_regs *regs, union hsr hsr)
 
     switch (hsr.ec) {
     case HSR_EC_CP15_32:
-        if ( !is_32bit_domain(current->domain) )
+        if ( !is_pv32_domain(current->domain) )
             return 0;
         return vtimer_emulate_cp32(regs, hsr);
     case HSR_EC_CP15_64:
-        if ( !is_32bit_domain(current->domain) )
+        if ( !is_pv32_domain(current->domain) )
             return 0;
         return vtimer_emulate_cp64(regs, hsr);
 #ifdef CONFIG_ARM_64
     case HSR_EC_SYSREG:
-        if ( is_32bit_domain(current->domain) )
+        if ( is_pv32_domain(current->domain) )
             return 0;
         return vtimer_emulate_sysreg(regs, hsr);
 #endif

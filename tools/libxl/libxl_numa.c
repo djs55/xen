@@ -180,7 +180,6 @@ static int nodemap_to_nr_vcpus(libxl__gc *gc, int vcpus_on_node[],
 /* Number of vcpus able to run on the cpus of the various nodes
  * (reported by filling the array vcpus_on_node[]). */
 static int nr_vcpus_on_nodes(libxl__gc *gc, libxl_cputopology *tinfo,
-                             size_t tinfo_elements,
                              const libxl_bitmap *suitable_cpumap,
                              int vcpus_on_node[])
 {
@@ -223,8 +222,6 @@ static int nr_vcpus_on_nodes(libxl__gc *gc, libxl_cputopology *tinfo,
              */
             libxl_bitmap_set_none(&nodes_counted);
             libxl_for_each_set_bit(k, vinfo[j].cpumap) {
-                if (k >= tinfo_elements)
-                    break;
                 int node = tinfo[k].node;
 
                 if (libxl_bitmap_test(suitable_cpumap, k) &&
@@ -308,11 +305,6 @@ int libxl__get_numa_candidate(libxl__gc *gc,
     if (ninfo == NULL)
         return ERROR_FAIL;
 
-    if (nr_nodes <= 1) {
-        *cndt_found = 0;
-        goto out;
-    }
-
     GCNEW_ARRAY(vcpus_on_node, nr_nodes);
 
     /*
@@ -372,7 +364,7 @@ int libxl__get_numa_candidate(libxl__gc *gc,
      * all we have to do later is summing up the right elements of the
      * vcpus_on_node array.
      */
-    rc = nr_vcpus_on_nodes(gc, tinfo, nr_cpus, suitable_cpumap, vcpus_on_node);
+    rc = nr_vcpus_on_nodes(gc, tinfo, suitable_cpumap, vcpus_on_node);
     if (rc)
         goto out;
 

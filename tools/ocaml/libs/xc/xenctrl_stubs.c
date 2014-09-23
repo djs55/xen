@@ -438,9 +438,7 @@ CAMLprim value stub_xc_vcpu_setaffinity(value xch, value domid,
 			c_cpumap[i/8] |= 1 << (i&7);
 	}
 	retval = xc_vcpu_setaffinity(_H(xch), _D(domid),
-				     Int_val(vcpu),
-				     c_cpumap, NULL,
-				     XEN_VCPUAFFINITY_HARD);
+	                             Int_val(vcpu), c_cpumap);
 	free(c_cpumap);
 
 	if (retval < 0)
@@ -462,9 +460,7 @@ CAMLprim value stub_xc_vcpu_getaffinity(value xch, value domid,
 		failwith_xc(_H(xch));
 
 	retval = xc_vcpu_getaffinity(_H(xch), _D(domid),
-				     Int_val(vcpu),
-				     c_cpumap, NULL,
-				     XEN_VCPUAFFINITY_HARD);
+	                             Int_val(vcpu), c_cpumap);
 	if (retval < 0) {
 		free(c_cpumap);
 		failwith_xc(_H(xch));

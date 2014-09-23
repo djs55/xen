@@ -33,21 +33,19 @@ typedef struct {
 
 #define LIBXL_UUID_BYTES(arg) LIBXL__UUID_BYTES(((uint8_t *)arg.uuid))
 
-#elif defined(__FreeBSD__) || defined(__NetBSD__)
+#elif defined(__NetBSD__)
 
 #include <uuid.h>
-#include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
 
-typedef union {
-    uuid_t uuid;
-    uint8_t uuid_raw[16];
-} libxl_uuid;
+#define LIBXL_UUID_BYTES(arg) LIBXL__UUID_BYTES(arg.uuid)
 
-#define LIBXL_UUID_BYTES(arg) LIBXL__UUID_BYTES(arg.uuid_raw)
+typedef struct {
+    uint8_t uuid[16];
+} libxl_uuid;
 
 #else
 
@@ -55,18 +53,12 @@ typedef union {
 
 #endif
 
-int libxl_uuid_is_nil(const libxl_uuid *uuid);
+int libxl_uuid_is_nil(libxl_uuid *uuid);
 void libxl_uuid_generate(libxl_uuid *uuid);
 int libxl_uuid_from_string(libxl_uuid *uuid, const char *in);
-void libxl_uuid_copy(libxl_ctx *ctx_opt, libxl_uuid *dst,
-                     const libxl_uuid *src);
-#if defined(LIBXL_API_VERSION) && LIBXL_API_VERSION < 0x040500
-void libxl_uuid_copy(dst, src) libxl_uuid_copy(NULL, dst, src)
-#endif
-
+void libxl_uuid_copy(libxl_uuid *dst, const libxl_uuid *src);
 void libxl_uuid_clear(libxl_uuid *uuid);
-int libxl_uuid_compare(const libxl_uuid *uuid1, const libxl_uuid *uuid2);
-const uint8_t *libxl_uuid_bytearray_const(const libxl_uuid *uuid);
+int libxl_uuid_compare(libxl_uuid *uuid1, libxl_uuid *uuid2);
 uint8_t *libxl_uuid_bytearray(libxl_uuid *uuid);
 
 #endif /* __LIBXL_UUID_H__ */

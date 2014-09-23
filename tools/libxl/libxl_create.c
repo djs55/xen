@@ -102,8 +102,6 @@ static int sched_params_valid(libxl__gc *gc,
 int libxl__domain_build_info_setdefault(libxl__gc *gc,
                                         libxl_domain_build_info *b_info)
 {
-    int i;
-
     if (b_info->type != LIBXL_DOMAIN_TYPE_HVM &&
         b_info->type != LIBXL_DOMAIN_TYPE_PV)
         return ERROR_INVAL;
@@ -189,20 +187,19 @@ int libxl__domain_build_info_setdefault(libxl__gc *gc,
     } else if (b_info->avail_vcpus.size > HVM_MAX_VCPUS)
         return ERROR_FAIL;
 
-    /* In libxl internals, we want to deal with vcpu_hard_affinity only! */
-    if (b_info->cpumap.size && !b_info->num_vcpu_hard_affinity) {
-        b_info->vcpu_hard_affinity = libxl__calloc(gc, b_info->max_vcpus,
-                                                   sizeof(libxl_bitmap));
-        for (i = 0; i < b_info->max_vcpus; i++) {
-            if (libxl_cpu_bitmap_alloc(CTX, &b_info->vcpu_hard_affinity[i], 0))
-                return ERROR_FAIL;
-            libxl_bitmap_copy(CTX, &b_info->vcpu_hard_affinity[i],
-                              &b_info->cpumap);
-        }
-        b_info->num_vcpu_hard_affinity = b_info->max_vcpus;
+    if (!b_info->cpumap.size) {
+        if (libxl_cpu_bitmap_alloc(CTX, &b_info->cpumap, 0))
+            return ERROR_FAIL;
+        libxl_bitmap_set_any(&b_info->cpumap);
     }
 
     libxl_defbool_setdefault(&b_info->numa_placement, true);
+
+    if (!b_info->nodemap.size) {
+        if (libxl_node_bitmap_alloc(CTX, &b_info->nodemap, 0))
+            return ERROR_FAIL;
+        libxl_bitmap_set_any(&b_info->nodemap);
+    }
 
     if (b_info->max_memkb == LIBXL_MEMKB_DEFAULT)
         b_info->max_memkb = 32 * 1024;
@@ -214,10 +211,6 @@ int libxl__domain_build_info_setdefault(libxl__gc *gc,
     libxl_defbool_setdefault(&b_info->localtime, false);
 
     libxl_defbool_setdefault(&b_info->disable_migrate, false);
-
-    for (i = 0 ; i < b_info->num_iomem; i++)
-        if (b_info->iomem[i].gfn == LIBXL_INVALID_GFN)
-            b_info->iomem[i].gfn = b_info->iomem[i].start;
 
     if (!b_info->event_channels)
         b_info->event_channels = 1023;
@@ -233,10 +226,6 @@ int libxl__domain_build_info_setdefault(libxl__gc *gc,
         switch (b_info->device_model_version) {
         case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN_TRADITIONAL:
             switch (b_info->u.hvm.vga.kind) {
-            case LIBXL_VGA_INTERFACE_TYPE_NONE:
-                if (b_info->video_memkb == LIBXL_MEMKB_DEFAULT)
-                    b_info->video_memkb = 0;
-                break;
             case LIBXL_VGA_INTERFACE_TYPE_STD:
                 if (b_info->video_memkb == LIBXL_MEMKB_DEFAULT)
                     b_info->video_memkb = 8 * 1024;
@@ -257,10 +246,6 @@ int libxl__domain_build_info_setdefault(libxl__gc *gc,
         case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN:
         default:
             switch (b_info->u.hvm.vga.kind) {
-            case LIBXL_VGA_INTERFACE_TYPE_NONE:
-                if (b_info->video_memkb == LIBXL_MEMKB_DEFAULT)
-                    b_info->video_memkb = 0;
-                break;
             case LIBXL_VGA_INTERFACE_TYPE_STD:
                 if (b_info->video_memkb == LIBXL_MEMKB_DEFAULT)
                     b_info->video_memkb = 16 * 1024;
@@ -299,13 +284,6 @@ int libxl__domain_build_info_setdefault(libxl__gc *gc,
         libxl_defbool_setdefault(&b_info->u.hvm.usb,                false);
         libxl_defbool_setdefault(&b_info->u.hvm.xen_platform_pci,   true);
 
-        libxl_defbool_setdefault(&b_info->u.hvm.spice.enable, false);
-        if (!libxl_defbool_val(b_info->u.hvm.spice.enable) &&
-            (b_info->u.hvm.spice.usbredirection > 0) ){
-            b_info->u.hvm.spice.usbredirection = 0;
-            LOG(WARN, "spice disabled, disabling usbredirection");
-        }
-
         if (!b_info->u.hvm.usbversion &&
             (b_info->u.hvm.spice.usbredirection > 0) )
             b_info->u.hvm.usbversion = 2;
@@ -338,6 +316,7 @@ int libxl__domain_build_info_setdefault(libxl__gc *gc,
             libxl_defbool_setdefault(&b_info->u.hvm.sdl.opengl, false);
         }
 
+        libxl_defbool_setdefault(&b_info->u.hvm.spice.enable, false);
         if (libxl_defbool_val(b_info->u.hvm.spice.enable)) {
             libxl_defbool_setdefault(&b_info->u.hvm.spice.disable_ticketing,
                                      false);
@@ -358,25 +337,6 @@ int libxl__domain_build_info_setdefault(libxl__gc *gc,
             b_info->shadow_memkb = 0;
         if (b_info->u.pv.slack_memkb == LIBXL_MEMKB_DEFAULT)
             b_info->u.pv.slack_memkb = 0;
-
-        /* For compatibility, fill in b_info->kernel|ramdisk|cmdline
-         * with the value in u.pv, later processing will use
-         * b_info->kernel|ramdisk|cmdline only.
-         * User with old APIs that passes u.pv.kernel|ramdisk|cmdline
-         * is not affected.
-         */
-        if (!b_info->kernel && b_info->u.pv.kernel) {
-            b_info->kernel = b_info->u.pv.kernel;
-            b_info->u.pv.kernel = NULL;
-        }
-        if (!b_info->ramdisk && b_info->u.pv.ramdisk) {
-            b_info->ramdisk = b_info->u.pv.ramdisk;
-            b_info->u.pv.ramdisk = NULL;
-        }
-        if (!b_info->cmdline && b_info->u.pv.cmdline) {
-            b_info->cmdline = b_info->u.pv.cmdline;
-            b_info->u.pv.cmdline = NULL;
-        }
         break;
     default:
         LIBXL__LOG(CTX, LIBXL__LOG_ERROR,
@@ -511,7 +471,7 @@ int libxl__domain_make(libxl__gc *gc, libxl_domain_create_info *info,
     *domid = -1;
 
     /* Ultimately, handle is an array of 16 uint8_t, same as uuid */
-    libxl_uuid_copy(ctx, (libxl_uuid *)handle, &info->uuid);
+    libxl_uuid_copy((libxl_uuid *)handle, &info->uuid);
 
     ret = xc_domain_create(ctx->xch, info->ssidref, handle, flags, domid);
     if (ret < 0) {
@@ -616,7 +576,12 @@ retry_transaction:
                         ARRAY_SIZE(rwperm));
     }
 
-    vm_list = libxl_list_vm(ctx, &nb_vm);
+    if (info->type == LIBXL_DOMAIN_TYPE_HVM)
+        libxl__xs_mkdir(gc, t,
+            libxl__sprintf(gc, "%s/hvmloader/generation-id-address", dom_path),
+                        rwperm, ARRAY_SIZE(rwperm));
+
+                    vm_list = libxl_list_vm(ctx, &nb_vm);
     if (!vm_list) {
         LOG(ERROR, "cannot get number of running guests");
         rc = ERROR_FAIL;
@@ -751,63 +716,6 @@ static void initiate_domain_create(libxl__egc *egc,
 
     domid = 0;
 
-    if (d_config->c_info.ssid_label) {
-        char *s = d_config->c_info.ssid_label;
-        ret = libxl_flask_context_to_sid(ctx, s, strlen(s),
-                                         &d_config->c_info.ssidref);
-        if (ret) {
-            if (errno == ENOSYS) {
-                LOG(WARN, "XSM Disabled: init_seclabel not supported");
-                ret = 0;
-            } else {
-                LOG(ERROR, "Invalid init_seclabel: %s", s);
-                goto error_out;
-            }
-        }
-    }
-
-    if (d_config->b_info.exec_ssid_label) {
-        char *s = d_config->b_info.exec_ssid_label;
-        ret = libxl_flask_context_to_sid(ctx, s, strlen(s),
-                                         &d_config->b_info.exec_ssidref);
-        if (ret) {
-            if (errno == ENOSYS) {
-                LOG(WARN, "XSM Disabled: seclabel not supported");
-                ret = 0;
-            } else {
-                LOG(ERROR, "Invalid seclabel: %s", s);
-                goto error_out;
-            }
-        }
-    }
-
-    if (d_config->b_info.device_model_ssid_label) {
-        char *s = d_config->b_info.device_model_ssid_label;
-        ret = libxl_flask_context_to_sid(ctx, s, strlen(s),
-                                         &d_config->b_info.device_model_ssidref);
-        if (ret) {
-            if (errno == ENOSYS) {
-                LOG(WARN,"XSM Disabled: device_model_stubdomain_seclabel not supported");
-                ret = 0;
-            } else {
-                LOG(ERROR, "Invalid device_model_stubdomain_seclabel: %s", s);
-                goto error_out;
-            }
-        }
-    }
-
-    if (d_config->c_info.pool_name) {
-        d_config->c_info.poolid = -1;
-        libxl_cpupool_qualifier_to_cpupoolid(ctx, d_config->c_info.pool_name,
-                                             &d_config->c_info.poolid,
-                                             NULL);
-    }
-    if (!libxl_cpupoolid_is_valid(ctx, d_config->c_info.poolid)) {
-        LOG(ERROR, "Illegal pool specified: %s", d_config->c_info.pool_name);
-        ret = ERROR_INVAL;
-        goto error_out;
-    }
-
     /* If target_memkb is smaller than max_memkb, the subsequent call
      * to libxc when building HVM domain will enable PoD mode.
      */
@@ -883,7 +791,7 @@ static void initiate_domain_create(libxl__egc *egc,
     }
 
     if (restore_fd >= 0) {
-        LOG(DEBUG, "restoring, not running bootloader");
+        LOG(DEBUG, "restoring, not running bootloader\n");
         domcreate_bootloader_done(egc, &dcs->bl, 0);
     } else  {
         LOG(DEBUG, "running bootloader");
@@ -987,7 +895,7 @@ static void domcreate_bootloader_done(libxl__egc *egc,
         goto out;
     }
     libxl__xc_domain_restore(egc, dcs,
-                             hvm, pae, superpages);
+                             hvm, pae, superpages, 1);
     return;
 
  out:
@@ -995,7 +903,7 @@ static void domcreate_bootloader_done(libxl__egc *egc,
 }
 
 void libxl__srm_callout_callback_restore_results(unsigned long store_mfn,
-          unsigned long console_mfn, void *user)
+          unsigned long console_mfn, unsigned long genidad, void *user)
 {
     libxl__save_helper_state *shs = user;
     libxl__domain_create_state *dcs = CONTAINER_OF(shs, *dcs, shs);
@@ -1004,6 +912,7 @@ void libxl__srm_callout_callback_restore_results(unsigned long store_mfn,
 
     state->store_mfn =            store_mfn;
     state->console_mfn =          console_mfn;
+    state->vm_generationid_addr = genidad;
     shs->need_results =           0;
 }
 
@@ -1015,7 +924,7 @@ void libxl__xc_domain_restore_done(libxl__egc *egc, void *dcs_void,
     libxl_ctx *ctx = libxl__gc_owner(gc);
     char **vments = NULL, **localents = NULL;
     struct timeval start_time;
-    int i, esave;
+    int i, esave, flags;
 
     /* convenience aliases */
     const uint32_t domid = dcs->guest_domid;
@@ -1083,7 +992,17 @@ out:
     }
 
     esave = errno;
-    libxl_fd_set_nonblock(ctx, fd, 0);
+
+    flags = fcntl(fd, F_GETFL);
+    if (flags == -1) {
+        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "unable to get flags on restore fd");
+    } else {
+        flags &= ~O_NONBLOCK;
+        if (fcntl(fd, F_SETFL, flags) == -1)
+            LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "unable to put restore fd"
+                         " back to blocking mode");
+    }
+
     errno = esave;
     domcreate_rebuild_done(egc, dcs, ret);
 }
@@ -1180,17 +1099,6 @@ static void domcreate_launch_dm(libxl__egc *egc, libxl__multidev *multidev,
                  "failed give dom%d access to iomem range %"PRIx64"-%"PRIx64,
                  domid, io->start, io->start + io->number - 1);
             ret = ERROR_FAIL;
-            continue;
-        }
-        ret = xc_domain_memory_mapping(CTX->xch, domid,
-                                       io->gfn, io->start,
-                                       io->number, 1);
-        if (ret < 0) {
-            LOGE(ERROR,
-                 "failed to map to dom%d iomem range %"PRIx64"-%"PRIx64
-                 " to guest address %"PRIx64,
-                 domid, io->start, io->start + io->number - 1, io->gfn);
-            ret = ERROR_FAIL;
         }
     }
 
@@ -1216,15 +1124,6 @@ static void domcreate_launch_dm(libxl__egc *egc, libxl__multidev *multidev,
             libxl__spawn_stub_dm(egc, &dcs->dmss);
         else
             libxl__spawn_local_dm(egc, &dcs->dmss.dm);
-
-        /*
-         * Handle the domain's (and the related stubdomain's) access to
-         * the VGA framebuffer.
-         */
-        ret = libxl__grant_vga_iomem_permission(gc, domid, d_config);
-        if ( ret )
-            goto error_out;
-
         return;
     }
     case LIBXL_DOMAIN_TYPE_PV:
@@ -1363,14 +1262,8 @@ static void domcreate_attach_pci(libxl__egc *egc, libxl__multidev *multidev,
         goto error_out;
     }
 
-    for (i = 0; i < d_config->num_pcidevs; i++) {
-        ret = libxl__device_pci_add(gc, domid, &d_config->pcidevs[i], 1);
-        if (ret < 0) {
-            LIBXL__LOG(ctx, LIBXL__LOG_ERROR,
-                       "libxl_device_pci_add failed: %d", ret);
-            goto error_out;
-        }
-    }
+    for (i = 0; i < d_config->num_pcidevs; i++)
+        libxl__device_pci_add(gc, domid, &d_config->pcidevs[i], 1);
 
     if (d_config->num_pcidevs > 0) {
         ret = libxl__create_pci_backend(gc, domid, d_config->pcidevs,
@@ -1398,29 +1291,9 @@ static void domcreate_complete(libxl__egc *egc,
 {
     STATE_AO_GC(dcs->ao);
     libxl_domain_config *const d_config = dcs->guest_config;
-    libxl_domain_config *d_config_saved = &dcs->guest_config_saved;
 
     if (!rc && d_config->b_info.exec_ssidref)
         rc = xc_flask_relabel_domain(CTX->xch, dcs->guest_domid, d_config->b_info.exec_ssidref);
-
-    if (!rc) {
-        libxl__domain_userdata_lock *lock;
-
-        /* Note that we hold CTX lock at this point so only need to
-         * take data store lock
-         */
-        lock = libxl__lock_domain_userdata(gc, dcs->guest_domid);
-        if (!lock) {
-            rc = ERROR_LOCK_FAIL;
-        } else {
-            libxl__update_domain_configuration(gc, d_config_saved, d_config);
-            rc = libxl__set_domain_configuration(gc, dcs->guest_domid,
-                                                 d_config_saved);
-            libxl__unlock_domain_userdata(lock);
-        }
-    }
-
-    libxl_domain_config_dispose(d_config_saved);
 
     if (rc) {
         if (dcs->guest_domid) {
@@ -1472,8 +1345,6 @@ static int do_domain_create(libxl_ctx *ctx, libxl_domain_config *d_config,
     GCNEW(cdcs);
     cdcs->dcs.ao = ao;
     cdcs->dcs.guest_config = d_config;
-    libxl_domain_config_init(&cdcs->dcs.guest_config_saved);
-    libxl_domain_config_copy(ctx, &cdcs->dcs.guest_config_saved, d_config);
     cdcs->dcs.restore_fd = restore_fd;
     cdcs->dcs.callback = domain_create_cb;
     cdcs->dcs.checkpointed_stream = checkpointed_stream;

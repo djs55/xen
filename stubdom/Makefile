@@ -23,6 +23,9 @@ TARGET_CFLAGS=-mno-red-zone
 NEWLIB_CFLAGS+=-D_I386MACH_ALLOW_HW_INTERRUPTS
 STUBDOM_SUPPORTED=1
 endif
+ifeq ($(GNU_TARGET_ARCH), ia64)
+TARGET_CFLAGS=-mconstant-gp
+endif
 
 CROSS_ROOT=cross-root-$(GNU_TARGET_ARCH)
 CROSS_PREFIX=$(CURDIR)/$(CROSS_ROOT)
@@ -208,9 +211,6 @@ tpm_emulator-$(XEN_TARGET_ARCH): tpm_emulator-$(TPMEMU_VERSION).tar.gz
 	patch -d $@ -p1 < tpmemu-$(TPMEMU_VERSION).patch;
 	patch -d $@ -p1 < vtpm-bufsize.patch
 	patch -d $@ -p1 < vtpm-locality.patch
-	patch -d $@ -p1 < vtpm-parent-sign-ek.patch
-	patch -d $@ -p1 < vtpm-deepquote.patch
-	patch -d $@ -p1 < vtpm-cmake-Wextra.patch
 	mkdir $@/build
 	cd $@/build; CC=${CC} $(CMAKE) .. -DCMAKE_C_FLAGS:STRING="-std=c99 -DTPM_NO_EXTERN $(TARGET_CPPFLAGS) $(TARGET_CFLAGS) -Wno-declaration-after-statement"
 	touch $@

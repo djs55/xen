@@ -104,7 +104,6 @@
 #include <xen/xmalloc.h>
 #include <xen/efi.h>
 #include <xen/grant_table.h>
-#include <xen/hypercall.h>
 #include <asm/paging.h>
 #include <asm/shadow.h>
 #include <asm/page.h>
@@ -162,8 +161,7 @@ boolean_param("allowsuperpage", opt_allow_superpage);
 static void put_superpage(unsigned long mfn);
 
 static uint32_t base_disallow_mask;
-/* Global bit is allowed to be set on L1 PTEs. Intended for user mappings. */
-#define L1_DISALLOW_MASK ((base_disallow_mask | _PAGE_GNTTAB) & ~_PAGE_GLOBAL)
+#define L1_DISALLOW_MASK (base_disallow_mask | _PAGE_GNTTAB)
 #define L2_DISALLOW_MASK (base_disallow_mask & ~_PAGE_PSE)
 
 #define l3_disallow_mask(d) (!is_pv_32on64_domain(d) ?  \
@@ -171,6 +169,12 @@ static uint32_t base_disallow_mask;
                              0xFFFFF198U)
 
 #define L4_DISALLOW_MASK (base_disallow_mask)
+
+#ifdef USER_MAPPINGS_ARE_GLOBAL
+/* Global bit is allowed to be set on L1 PTEs. Intended for user mappings. */
+#undef L1_DISALLOW_MASK
+#define L1_DISALLOW_MASK ((base_disallow_mask | _PAGE_GNTTAB) & ~_PAGE_GLOBAL)
+#endif
 
 #define l1_disallow_mask(d)                                     \
     ((d != dom_io) &&                                           \
@@ -989,6 +993,7 @@ get_page_from_l4e(
     return rc;
 }
 
+#ifdef USER_MAPPINGS_ARE_GLOBAL
 #define adjust_guest_l1e(pl1e, d)                                            \
     do {                                                                     \
         if ( likely(l1e_get_flags((pl1e)) & _PAGE_PRESENT) &&                \
@@ -1005,6 +1010,14 @@ get_page_from_l4e(
                 l1e_add_flags((pl1e), (_PAGE_GLOBAL|_PAGE_USER));            \
         }                                                                    \
     } while ( 0 )
+#else
+#define adjust_guest_l1e(pl1e, d)                               \
+    do {                                                        \
+        if ( likely(l1e_get_flags((pl1e)) & _PAGE_PRESENT) &&   \
+             likely(!is_pv_32on64_domain(d)) )                  \
+            l1e_add_flags((pl1e), _PAGE_USER);                  \
+    } while ( 0 )
+#endif
 
 #define adjust_guest_l2e(pl2e, d)                               \
     do {                                                        \
@@ -1271,7 +1284,7 @@ static int alloc_l2_table(struct page_info *page, unsigned long type,
              && hypercall_preempt_check() )
         {
             page->nr_validated_ptes = i;
-            rc = -ERESTART;
+            rc = -EAGAIN;
             break;
         }
 
@@ -1342,7 +1355,7 @@ static int alloc_l3_table(struct page_info *page)
                   (rc = get_page_from_l3e(pl3e[i], pfn, d, partial)) > 0 )
             continue;
 
-        if ( rc == -ERESTART )
+        if ( rc == -EAGAIN )
         {
             page->nr_validated_ptes = i;
             page->partial_pte = partial ?: 1;
@@ -1351,7 +1364,7 @@ static int alloc_l3_table(struct page_info *page)
         {
             page->nr_validated_ptes = i;
             page->partial_pte = 0;
-            rc = -ERESTART;
+            rc = -EAGAIN;
         }
         if ( rc < 0 )
             break;
@@ -1361,7 +1374,7 @@ static int alloc_l3_table(struct page_info *page)
 
     if ( rc >= 0 && !create_pae_xen_mappings(d, pl3e) )
         rc = -EINVAL;
-    if ( rc < 0 && rc != -ERESTART && rc != -EINTR )
+    if ( rc < 0 && rc != -EAGAIN && rc != -EINTR )
     {
         MEM_LOG("Failure in alloc_l3_table: entry %d", i);
         if ( i )
@@ -1414,7 +1427,7 @@ static int alloc_l4_table(struct page_info *page)
              (rc = get_page_from_l4e(pl4e[i], pfn, d, partial)) > 0 )
             continue;
 
-        if ( rc == -ERESTART )
+        if ( rc == -EAGAIN )
         {
             page->nr_validated_ptes = i;
             page->partial_pte = partial ?: 1;
@@ -1428,7 +1441,7 @@ static int alloc_l4_table(struct page_info *page)
                 page->nr_validated_ptes = i;
                 page->partial_pte = 0;
                 if ( rc == -EINTR )
-                    rc = -ERESTART;
+                    rc = -EAGAIN;
                 else
                 {
                     if ( current->arch.old_guest_table )
@@ -1486,7 +1499,7 @@ static int free_l2_table(struct page_info *page, int preemptible)
              preemptible && i && hypercall_preempt_check() )
         {
            page->nr_validated_ptes = i;
-           err = -ERESTART;
+           err = -EAGAIN;
         }
     } while ( !err && i-- );
 
@@ -1523,7 +1536,7 @@ static int free_l3_table(struct page_info *page)
 
     unmap_domain_page(pl3e);
 
-    if ( rc == -ERESTART )
+    if ( rc == -EAGAIN )
     {
         page->nr_validated_ptes = i;
         page->partial_pte = partial ?: -1;
@@ -1532,7 +1545,7 @@ static int free_l3_table(struct page_info *page)
     {
         page->nr_validated_ptes = i + 1;
         page->partial_pte = 0;
-        rc = -ERESTART;
+        rc = -EAGAIN;
     }
     return rc > 0 ? 0 : rc;
 }
@@ -1553,7 +1566,7 @@ static int free_l4_table(struct page_info *page)
         partial = 0;
     } while ( i-- );
 
-    if ( rc == -ERESTART )
+    if ( rc == -EAGAIN )
     {
         page->nr_validated_ptes = i;
         page->partial_pte = partial ?: -1;
@@ -1562,7 +1575,7 @@ static int free_l4_table(struct page_info *page)
     {
         page->nr_validated_ptes = i + 1;
         page->partial_pte = 0;
-        rc = -ERESTART;
+        rc = -EAGAIN;
     }
 
     unmap_domain_page(pl4e);
@@ -2090,7 +2103,7 @@ static int alloc_page_type(struct page_info *page, unsigned long type,
         {
             ASSERT((page->u.inuse.type_info &
                     (PGT_count_mask | PGT_validated)) == 1);
-    case -ERESTART:
+    case -EAGAIN:
             get_page_light(page);
             page->u.inuse.type_info |= PGT_partial;
         }
@@ -2189,7 +2202,7 @@ static int __put_final_page_type(
     }
     else
     {
-        BUG_ON(rc != -ERESTART);
+        BUG_ON(rc != -EAGAIN);
         wmb();
         get_page_light(page);
         page->u.inuse.type_info |= PGT_partial;
@@ -2407,7 +2420,7 @@ int get_page_type(struct page_info *page, unsigned long type)
     int rc = __get_page_type(page, type, 0);
     if ( likely(rc == 0) )
         return 1;
-    ASSERT(rc != -EINTR && rc != -ERESTART);
+    ASSERT(rc != -EINTR && rc != -EAGAIN);
     return 0;
 }
 
@@ -2619,8 +2632,8 @@ int put_old_guest_table(struct vcpu *v)
     switch ( rc = put_page_and_type_preemptible(v->arch.old_guest_table) )
     {
     case -EINTR:
-    case -ERESTART:
-        return -ERESTART;
+    case -EAGAIN:
+        return -EAGAIN;
     }
 
     v->arch.old_guest_table = NULL;
@@ -2708,8 +2721,8 @@ int new_guest_cr3(unsigned long mfn)
         case 0:
             break;
         case -EINTR:
-        case -ERESTART:
-            return -ERESTART;
+        case -EAGAIN:
+            return -EAGAIN;
         default:
             MEM_LOG("Error while installing new compat baseptr %lx", mfn);
             return rc;
@@ -2744,8 +2757,8 @@ int new_guest_cr3(unsigned long mfn)
     case 0:
         break;
     case -EINTR:
-    case -ERESTART:
-        return -ERESTART;
+    case -EAGAIN:
+        return -EAGAIN;
     default:
         MEM_LOG("Error while installing new baseptr %lx", mfn);
         return rc;
@@ -2768,8 +2781,8 @@ int new_guest_cr3(unsigned long mfn)
             switch ( rc = put_page_and_type_preemptible(page) )
             {
             case -EINTR:
-                rc = -ERESTART;
-            case -ERESTART:
+                rc = -EAGAIN;
+            case -EAGAIN:
                 curr->arch.old_guest_table = page;
                 break;
             default:
@@ -2797,7 +2810,7 @@ static struct domain *get_pg_owner(domid_t domid)
         goto out;
     }
 
-    if ( !is_pvh_domain(curr) && unlikely(paging_mode_translate(curr)) )
+    if ( unlikely(paging_mode_translate(curr)) )
     {
         MEM_LOG("Cannot mix foreign mappings with translated domains");
         goto out;
@@ -2882,7 +2895,7 @@ long do_mmuext_op(
 
     if ( unlikely(rc) )
     {
-        if ( likely(rc == -ERESTART) )
+        if ( likely(rc == -EAGAIN) )
             rc = hypercall_create_continuation(
                      __HYPERVISOR_mmuext_op, "hihi", uops, count, pdone,
                      foreigndom);
@@ -2921,9 +2934,9 @@ long do_mmuext_op(
 
     for ( i = 0; i < count; i++ )
     {
-        if ( curr->arch.old_guest_table || (i && hypercall_preempt_check()) )
+        if ( curr->arch.old_guest_table || hypercall_preempt_check() )
         {
-            rc = -ERESTART;
+            rc = -EAGAIN;
             break;
         }
 
@@ -2977,8 +2990,8 @@ long do_mmuext_op(
             if ( unlikely(!okay) )
             {
                 if ( rc == -EINTR )
-                    rc = -ERESTART;
-                else if ( rc != -ERESTART )
+                    rc = -EAGAIN;
+                else if ( rc != -EAGAIN )
                     MEM_LOG("Error while pinning mfn %lx", page_to_mfn(page));
                 if ( page != curr->arch.old_guest_table )
                     put_page(page);
@@ -3047,7 +3060,7 @@ long do_mmuext_op(
             switch ( rc = put_page_and_type_preemptible(page) )
             {
             case -EINTR:
-            case -ERESTART:
+            case -EAGAIN:
                 curr->arch.old_guest_table = page;
                 rc = 0;
                 break;
@@ -3103,8 +3116,8 @@ long do_mmuext_op(
                 if ( unlikely(!okay) )
                 {
                     if ( rc == -EINTR )
-                        rc = -ERESTART;
-                    else if ( rc != -ERESTART )
+                        rc = -EAGAIN;
+                    else if ( rc != -EAGAIN )
                         MEM_LOG("Error while installing new mfn %lx",
                                 op.arg1.mfn);
                     break;
@@ -3123,8 +3136,8 @@ long do_mmuext_op(
                     switch ( rc = put_page_and_type_preemptible(page) )
                     {
                     case -EINTR:
-                        rc = -ERESTART;
-                    case -ERESTART:
+                        rc = -EAGAIN;
+                    case -EAGAIN:
                         curr->arch.old_guest_table = page;
                         okay = 0;
                         break;
@@ -3359,7 +3372,7 @@ long do_mmuext_op(
         guest_handle_add_offset(uops, 1);
     }
 
-    if ( rc == -ERESTART )
+    if ( rc == -EAGAIN )
     {
         ASSERT(i < count);
         rc = hypercall_create_continuation(
@@ -3416,7 +3429,7 @@ long do_mmu_update(
 
     if ( unlikely(rc) )
     {
-        if ( likely(rc == -ERESTART) )
+        if ( likely(rc == -EAGAIN) )
             rc = hypercall_create_continuation(
                      __HYPERVISOR_mmu_update, "hihi", ureqs, count, pdone,
                      foreigndom);
@@ -3468,9 +3481,9 @@ long do_mmu_update(
 
     for ( i = 0; i < count; i++ )
     {
-        if ( curr->arch.old_guest_table || (i && hypercall_preempt_check()) )
+        if ( curr->arch.old_guest_table || hypercall_preempt_check() )
         {
-            rc = -ERESTART;
+            rc = -EAGAIN;
             break;
         }
 
@@ -3600,7 +3613,7 @@ long do_mmu_update(
                 }
                 page_unlock(page);
                 if ( rc == -EINTR )
-                    rc = -ERESTART;
+                    rc = -EAGAIN;
             }
             else if ( get_page_type(page, PGT_writable_page) )
             {
@@ -3662,7 +3675,7 @@ long do_mmu_update(
         guest_handle_add_offset(ureqs, 1);
     }
 
-    if ( rc == -ERESTART )
+    if ( rc == -EAGAIN )
     {
         ASSERT(i < count);
         rc = hypercall_create_continuation(
@@ -4570,8 +4583,6 @@ int xenmem_add_to_physmap_one(
             page = mfn_to_page(mfn);
             break;
         }
-        case XENMAPSPACE_gmfn_foreign:
-            return p2m_add_foreign(d, idx, gpfn, foreign_domid);
         default:
             break;
     }
@@ -4620,10 +4631,9 @@ int xenmem_add_to_physmap_one(
     return rc;
 }
 
-long arch_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
+long arch_memory_op(int op, XEN_GUEST_HANDLE_PARAM(void) arg)
 {
     int rc;
-    int op = cmd & MEMOP_CMD_MASK;
 
     switch ( op )
     {
@@ -4777,7 +4787,7 @@ long arch_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
             .max_mfn = MACH2PHYS_NR_ENTRIES - 1
         };
 
-        if ( !mem_hotplug && is_hardware_domain(current->domain) )
+        if ( !mem_hotplug && current->domain == dom0 )
             mapping.max_mfn = max_page - 1;
         if ( copy_to_guest(arg, &mapping, 1) )
             return -EFAULT;
@@ -4818,7 +4828,7 @@ long arch_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
             rc = p2m_pod_set_mem_target(d, target.target_pages);
         }
 
-        if ( rc == -ERESTART )
+        if ( rc == -EAGAIN )
         {
             rc = hypercall_create_continuation(
                 __HYPERVISOR_memory_op, "lh", op, arg);
@@ -4843,7 +4853,7 @@ long arch_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
     }
 
     default:
-        return subarch_memory_op(cmd, arg);
+        return subarch_memory_op(op, arg);
     }
 
     return 0;
@@ -5212,7 +5222,7 @@ void *alloc_xen_pagetable(void)
     {
         void *ptr = alloc_xenheap_page();
 
-        BUG_ON(!hardware_domain && !ptr);
+        BUG_ON(!dom0 && !ptr);
         return ptr;
     }
 

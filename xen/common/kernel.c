@@ -135,13 +135,6 @@ void __init cmdline_parse(const char *cmdline)
                     parse_size_and_unit(optval, NULL));
                 break;
             case OPT_CUSTOM:
-                if ( !bool_assert )
-                {
-                    if ( *optval )
-                        break;
-                    safe_strcpy(opt, "no");
-                    optval = opt;
-                }
                 ((void (*)(const char *))param->var)(optval);
                 break;
             default:
@@ -250,8 +243,8 @@ DO(xen_version)(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
     {
         struct xen_compile_info info;
         safe_strcpy(info.compiler,       xen_compiler());
-        safe_strcpy(info.compile_by,     xen_compile_by());
-        safe_strcpy(info.compile_domain, xen_compile_domain());
+        safe_strcpy(info.compile_by,     xen_compile_system_maintainer_local());
+        safe_strcpy(info.compile_domain, xen_compile_system_maintainer_domain());
         safe_strcpy(info.compile_date,   xen_compile_date());
         if ( copy_to_guest(arg, &info, 1) )
             return -EFAULT;
@@ -310,7 +303,7 @@ DO(xen_version)(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
                     (1U << XENFEAT_auto_translated_physmap);
             if ( supervisor_mode_kernel )
                 fi.submap |= 1U << XENFEAT_supervisor_mode_kernel;
-            if ( is_hardware_domain(current->domain) )
+            if ( current->domain == dom0 )
                 fi.submap |= 1U << XENFEAT_dom0;
 #ifdef CONFIG_X86
             switch ( d->guest_type )
@@ -332,8 +325,6 @@ DO(xen_version)(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
                 break;
             }
 #endif
-            if ( is_domain_direct_mapped(d) )
-                fi.submap |= 1U << XENFEAT_grant_map_identity;
             break;
         default:
             return -EINVAL;

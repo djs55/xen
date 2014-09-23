@@ -18,6 +18,7 @@
  */
 
 #include <asm/device.h>
+#include <asm/early_printk.h>
 #include <asm/types.h>
 #include <xen/console.h>
 #include <xen/device_tree.h>
@@ -43,7 +44,7 @@ void __init dt_uart_init(void)
 
     if ( !console_has("dtuart") || !strcmp(opt_dtuart, "") )
     {
-        printk("No console\n");
+        early_printk("No console\n");
         return;
     }
 
@@ -53,7 +54,7 @@ void __init dt_uart_init(void)
     else
         options = "";
 
-    printk("Looking for UART console %s\n", devpath);
+    early_printk("Looking for UART console %s\n", devpath);
     if ( *devpath == '/' )
         dev = dt_find_node_by_path(devpath);
     else
@@ -61,12 +62,12 @@ void __init dt_uart_init(void)
 
     if ( !dev )
     {
-        printk("Unable to find device \"%s\"\n", devpath);
+        early_printk("Unable to find device \"%s\"\n", devpath);
         return;
     }
 
     ret = device_init(dev, DEVICE_SERIAL, options);
 
     if ( ret )
-        printk("Unable to initialize serial: %d\n", ret);
+        early_printk("Unable to initialize serial: %d\n", ret);
 }

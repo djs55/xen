@@ -31,7 +31,6 @@
 #include <xen/io/xenbus.h>
 #include <xen/io/tpmif.h>
 #include <mini-os/tpmfront.h>
-#include <mini-os/lib.h>
 #include <fcntl.h>
 
 //#define TPMFRONT_PRINT_DEBUG

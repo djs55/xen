@@ -38,7 +38,7 @@ static const char *qemu_xen_path(libxl__gc *gc)
 #ifdef QEMU_XEN_PATH
     return QEMU_XEN_PATH;
 #else
-    return libxl__abs_path(gc, "qemu-system-i386", libxl__libexec_path());
+    return libxl__abs_path(gc, "qemu-system-i386", "/usr/bin");
 #endif
 }
 
@@ -196,31 +196,8 @@ static char ** libxl__build_device_model_args_old(libxl__gc *gc,
         int nr_set_cpus = 0;
         char *s;
 
-        if (b_info->kernel) {
-            LOG(ERROR, "HVM direct kernel boot is not supported by "
-                "qemu-xen-traditional");
-            return NULL;
-        }
-
-        if (b_info->u.hvm.serial || b_info->u.hvm.serial_list) {
-            if ( b_info->u.hvm.serial && b_info->u.hvm.serial_list )
-            {
-                LOG(ERROR, "Both serial and serial_list set");
-                return NULL;
-            }
-            if (b_info->u.hvm.serial) {
-                flexarray_vappend(dm_args,
-                                  "-serial", b_info->u.hvm.serial, NULL);
-            } else if (b_info->u.hvm.serial_list) {
-                char **p;
-                for (p = b_info->u.hvm.serial_list;
-                     *p;
-                     p++) {
-                    flexarray_vappend(dm_args,
-                                      "-serial",
-                                      *p, NULL);
-                }
-            }
+        if (b_info->u.hvm.serial) {
+            flexarray_vappend(dm_args, "-serial", b_info->u.hvm.serial, NULL);
         }
 
         if (libxl_defbool_val(b_info->u.hvm.nographic) && (!sdl && !vnc)) {
@@ -240,9 +217,6 @@ static char ** libxl__build_device_model_args_old(libxl__gc *gc,
             break;
         case LIBXL_VGA_INTERFACE_TYPE_CIRRUS:
             break;
-        case LIBXL_VGA_INTERFACE_TYPE_NONE:
-            flexarray_append_pair(dm_args, "-vga", "none");
-            break;
         }
 
         if (b_info->u.hvm.boot) {
@@ -253,7 +227,8 @@ static char ** libxl__build_device_model_args_old(libxl__gc *gc,
             || b_info->u.hvm.usbdevice_list) {
             if ( b_info->u.hvm.usbdevice && b_info->u.hvm.usbdevice_list )
             {
-                LOG(ERROR, "Both usbdevice and usbdevice_list set");
+                LOG(ERROR, "%s: Both usbdevice and usbdevice_list set",
+                    __func__);
                 return NULL;
             }
             flexarray_append(dm_args, "-usb");
@@ -437,6 +412,7 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
     /*
      * Remove default devices created by qemu. Qemu will create only devices
      * defined by xen, since the devices not defined by xen are not usable.
+     * Remove deleting of empty floppy no more needed with nodefault.
      */
     flexarray_append(dm_args, "-nodefaults");
 
@@ -494,6 +470,10 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
         /* XXX sdl->{display,xauthority} into $DISPLAY/$XAUTHORITY */
     }
 
+    /*if (info->type == LIBXL_DOMAIN_TYPE_PV && !b_info->nographic) {
+        flexarray_vappend(dm_args, "-vga", "xenfb", NULL);
+      } never was possible?*/
+
     if (keymap) {
         flexarray_vappend(dm_args, "-k", keymap, NULL);
     }
@@ -501,25 +481,8 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
     if (b_info->type == LIBXL_DOMAIN_TYPE_HVM) {
         int ioemu_nics = 0;
 
-        if (b_info->u.hvm.serial || b_info->u.hvm.serial_list) {
-            if ( b_info->u.hvm.serial && b_info->u.hvm.serial_list )
-            {
-                LOG(ERROR, "Both serial and serial_list set");
-                return NULL;
-            }
-            if (b_info->u.hvm.serial) {
-                flexarray_vappend(dm_args,
-                                  "-serial", b_info->u.hvm.serial, NULL);
-            } else if (b_info->u.hvm.serial_list) {
-                char **p;
-                for (p = b_info->u.hvm.serial_list;
-                     *p;
-                     p++) {
-                    flexarray_vappend(dm_args,
-                                      "-serial",
-                                      *p, NULL);
-                }
-            }
+        if (b_info->u.hvm.serial) {
+            flexarray_vappend(dm_args, "-serial", b_info->u.hvm.serial, NULL);
         }
 
         if (libxl_defbool_val(b_info->u.hvm.nographic) && (!sdl && !vnc)) {
@@ -544,16 +507,13 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
 
         switch (b_info->u.hvm.vga.kind) {
         case LIBXL_VGA_INTERFACE_TYPE_STD:
-            flexarray_append_pair(dm_args, "-device",
-                GCSPRINTF("VGA,vgamem_mb=%d",
-                libxl__sizekb_to_mb(b_info->video_memkb)));
+            flexarray_append_pair(dm_args, "-device", "VGA");
             break;
         case LIBXL_VGA_INTERFACE_TYPE_CIRRUS:
-            flexarray_append_pair(dm_args, "-device",
-                GCSPRINTF("cirrus-vga,vgamem_mb=%d",
+            flexarray_append_pair(dm_args, "-device", "cirrus-vga");
+            flexarray_append_pair(dm_args, "-global",
+                GCSPRINTF("vga.vram_size_mb=%d",
                 libxl__sizekb_to_mb(b_info->video_memkb)));
-            break;
-        case LIBXL_VGA_INTERFACE_TYPE_NONE:
             break;
         }
 
@@ -566,7 +526,8 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
             || b_info->u.hvm.usbdevice_list) {
             if ( b_info->u.hvm.usbdevice && b_info->u.hvm.usbdevice_list )
             {
-                LOG(ERROR, "Both usbdevice and usbdevice_list set");
+                LOG(ERROR, "%s: Both usbdevice and usbdevice_list set",
+                    __func__);
                 return NULL;
             }
             flexarray_append(dm_args, "-usb");
@@ -603,8 +564,8 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
                     "-device", "nec-usb-xhci,id=usb", NULL);
                 break;
             default:
-                LOG(ERROR, "usbversion parameter is invalid, "
-                    "must be between 1 and 3");
+                LOG(ERROR, "%s: usbversion parameter is invalid, "
+                    "must be between 1 and 3", __func__);
                 return NULL;
             }
             if (b_info->u.hvm.spice.usbredirection >= 0 &&
@@ -615,8 +576,8 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
                         libxl__sprintf(gc, "usb-redir,chardev=usbrc%d,"
                         "id=usbrc%d", i, i), NULL);
             } else {
-                LOG(ERROR, "usbredirection parameter is invalid, "
-                    "it must be between 1 and 4");
+                LOG(ERROR, "%s: usbredirection parameter is invalid, "
+                    "it must be between 1 and 4", __func__);
                 return NULL;
             }
         }
@@ -948,11 +909,7 @@ void libxl__spawn_stub_dm(libxl__egc *egc, libxl__stub_dm_spawn_state *sdss)
     dm_config->c_info.type = LIBXL_DOMAIN_TYPE_PV;
     dm_config->c_info.name = libxl__stub_dm_name(gc,
                                     libxl__domid_to_name(gc, guest_domid));
-    /* When we are here to launch stubdom, ssidref is a valid value
-     * already, no need to parse it again.
-     */
     dm_config->c_info.ssidref = guest_config->b_info.device_model_ssidref;
-    dm_config->c_info.ssid_label = NULL;
 
     libxl_uuid_generate(&dm_config->c_info.uuid);
 

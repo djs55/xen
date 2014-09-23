@@ -22,14 +22,13 @@ static inline void write_pte(lpae_t *p, lpae_t pte)
 #define __clean_and_invalidate_xen_dcache_one(R) "dc  civac, %" #R ";"
 
 /*
- * Flush all hypervisor mappings from the TLB of the local processor.
- *
+ * Flush all hypervisor mappings from the TLB
  * This is needed after changing Xen code mappings.
  *
  * The caller needs to issue the necessary DSB and D-cache flushes
  * before calling flush_xen_text_tlb.
  */
-static inline void flush_xen_text_tlb_local(void)
+static inline void flush_xen_text_tlb(void)
 {
     asm volatile (
         "isb;"       /* Ensure synchronization with previous changes to text */
@@ -41,11 +40,10 @@ static inline void flush_xen_text_tlb_local(void)
 }
 
 /*
- * Flush all hypervisor mappings from the data TLB of the local
- * processor. This is not sufficient when changing code mappings or
- * for self modifying code.
+ * Flush all hypervisor mappings from the data TLB. This is not
+ * sufficient when changing code mappings or for self modifying code.
  */
-static inline void flush_xen_data_tlb_local(void)
+static inline void flush_xen_data_tlb(void)
 {
     asm volatile (
         "dsb    sy;"                    /* Ensure visibility of PTE writes */
@@ -55,17 +53,21 @@ static inline void flush_xen_data_tlb_local(void)
         : : : "memory");
 }
 
-/* Flush TLB of local processor for address va. */
-static inline void  __flush_xen_data_tlb_one_local(vaddr_t va)
+/*
+ * Flush a range of VA's hypervisor mappings from the data TLB. This is not
+ * sufficient when changing code mappings or for self modifying code.
+ */
+static inline void flush_xen_data_tlb_range_va(unsigned long va, unsigned long size)
 {
-    asm volatile("tlbi vae2, %0;" : : "r" (va>>PAGE_SHIFT) : "memory");
-}
-
-/* Flush TLB of all processors in the inner-shareable domain for
- * address va. */
-static inline void __flush_xen_data_tlb_one(vaddr_t va)
-{
-    asm volatile("tlbi vae2is, %0;" : : "r" (va>>PAGE_SHIFT) : "memory");
+    unsigned long end = va + size;
+    dsb(); /* Ensure preceding are visible */
+    while ( va < end ) {
+        asm volatile("tlbi vae2, %0;"
+                     : : "r" (va>>PAGE_SHIFT) : "memory");
+        va += PAGE_SIZE;
+    }
+    dsb(); /* Ensure completion of the TLB flush */
+    isb();
 }
 
 /* Ask the MMU to translate a VA for us */
@@ -81,14 +83,11 @@ static inline uint64_t __va_to_par(vaddr_t va)
 }
 
 /* Ask the MMU to translate a Guest VA for us */
-static inline uint64_t gva_to_ma_par(vaddr_t va, unsigned int flags)
+static inline uint64_t gva_to_ma_par(vaddr_t va)
 {
     uint64_t par, tmp = READ_SYSREG64(PAR_EL1);
 
-    if ( (flags & GV2M_WRITE) == GV2M_WRITE )
-        asm volatile ("at s12e1r, %0;" : : "r" (va));
-    else
-        asm volatile ("at s12e1w, %0;" : : "r" (va));
+    asm volatile ("at s12e1r, %0;" : : "r" (va));
     isb();
     par = READ_SYSREG64(PAR_EL1);
     WRITE_SYSREG64(tmp, PAR_EL1);
@@ -105,8 +104,6 @@ static inline uint64_t gva_to_ipa_par(vaddr_t va)
     WRITE_SYSREG64(tmp, PAR_EL1);
     return par;
 }
-
-extern void clear_page(void *to);
 
 #endif /* __ASSEMBLY__ */
 

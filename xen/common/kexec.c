@@ -265,8 +265,6 @@ static int noinline one_cpu_only(void)
     }
 
     set_bit(KEXEC_FLAG_IN_PROGRESS, &kexec_flags);
-    printk("Executing kexec image on cpu%u\n", cpu);
-
     return 0;
 }
 
@@ -341,6 +339,8 @@ void kexec_crash(void)
     pos = (test_bit(KEXEC_FLAG_CRASH_POS, &kexec_flags) != 0);
     if ( !test_bit(KEXEC_IMAGE_CRASH_BASE + pos, &kexec_flags) )
         return;
+
+    printk("Executing crash image\n");
 
     kexecing = TRUE;
 
@@ -872,7 +872,7 @@ static int kexec_load_slot(struct kexec_image *kimage)
 static uint16_t kexec_load_v1_arch(void)
 {
 #ifdef CONFIG_X86
-    return is_pv_32on64_domain(hardware_domain) ? EM_386 : EM_X86_64;
+    return is_pv_32on64_domain(dom0) ? EM_386 : EM_X86_64;
 #else
     return EM_NONE;
 #endif

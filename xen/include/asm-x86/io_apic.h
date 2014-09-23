@@ -36,41 +36,41 @@
  */
 union IO_APIC_reg_00 {
 	u32	raw;
-	struct __packed {
+	struct {
 		u32	__reserved_2	: 14,
 			LTS		:  1,
 			delivery_type	:  1,
 			__reserved_1	:  8,
 			ID		:  8;
-	} bits;
+	} __attribute__ ((packed)) bits;
 };
 
 union IO_APIC_reg_01 {
 	u32	raw;
-	struct __packed {
+	struct {
 		u32	version		:  8,
 			__reserved_2	:  7,
 			PRQ		:  1,
 			entries		:  8,
 			__reserved_1	:  8;
-	} bits;
+	} __attribute__ ((packed)) bits;
 };
 
 union IO_APIC_reg_02 {
 	u32	raw;
-	struct __packed {
+	struct {
 		u32	__reserved_2	: 24,
 			arbitration	:  4,
 			__reserved_1	:  4;
-	} bits;
+	} __attribute__ ((packed)) bits;
 };
 
 union IO_APIC_reg_03 {
 	u32	raw;
-	struct __packed {
+	struct {
 		u32	boot_DT		:  1,
 			__reserved_1	: 31;
-	} bits;
+	} __attribute__ ((packed)) bits;
 };
 
 /*
@@ -90,7 +90,7 @@ enum ioapic_irq_destination_types {
 	dest_ExtINT = 7
 };
 
-struct __packed IO_APIC_route_entry {
+struct IO_APIC_route_entry {
 	__u32	vector		:  8,
 		delivery_mode	:  3,	/* 000: FIXED
 					 * 001: lowest prio
@@ -119,7 +119,7 @@ struct __packed IO_APIC_route_entry {
 			__u32 dest32;
 	} dest;
 
-};
+} __attribute__ ((packed));
 
 /*
  * MP-BIOS irq configuration table structures:

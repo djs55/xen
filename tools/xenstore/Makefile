@@ -6,24 +6,18 @@ MINOR = 3
 
 CFLAGS += -Werror
 CFLAGS += -I.
-CFLAGS += -I$(XEN_ROOT)/tools/
 CFLAGS += $(CFLAGS_libxenctrl)
 
-CFLAGS-$(CONFIG_SYSTEMD)  += $(SYSTEMD_CFLAGS)
-LDFLAGS-$(CONFIG_SYSTEMD) += $(SYSTEMD_LIBS)
-
-CFLAGS  += $(CFLAGS-y)
-LDFLAGS += $(LDFLAGS-y)
+LDFLAGS_libxenctrl += $(call LDFLAGS_RPATH,../lib)
 
 CLIENTS := xenstore-exists xenstore-list xenstore-read xenstore-rm xenstore-chmod
 CLIENTS += xenstore-write xenstore-ls xenstore-watch
 
 XENSTORED_OBJS = xenstored_core.o xenstored_watch.o xenstored_domain.o xenstored_transaction.o xs_lib.o talloc.o utils.o tdb.o hashtable.o
 
-XENSTORED_OBJS_$(CONFIG_Linux) = xenstored_posix.o
+XENSTORED_OBJS_$(CONFIG_Linux) = xenstored_linux.o xenstored_posix.o
 XENSTORED_OBJS_$(CONFIG_SunOS) = xenstored_solaris.o xenstored_posix.o xenstored_probes.o
-XENSTORED_OBJS_$(CONFIG_NetBSD) = xenstored_posix.o
-XENSTORED_OBJS_$(CONFIG_FreeBSD) = xenstored_posix.o
+XENSTORED_OBJS_$(CONFIG_NetBSD) = xenstored_netbsd.o xenstored_posix.o
 XENSTORED_OBJS_$(CONFIG_MiniOS) = xenstored_minios.o
 
 XENSTORED_OBJS += $(XENSTORED_OBJS_y)
@@ -35,13 +29,7 @@ LIBXENSTORE := libxenstore.a
 xenstore xenstore-control: CFLAGS += -static
 endif
 
-ALL_TARGETS = libxenstore.a clients
-ifneq ($(nosharedlibs),y)
-ALL_TARGETS += libxenstore.so
-endif
-ifeq ($(XENSTORE_XENSTORED),y)
-ALL_TARGETS += xs_tdb_dump xenstored
-endif
+ALL_TARGETS = libxenstore.so libxenstore.a clients xs_tdb_dump xenstored
 
 ifeq ($(CONFIG_Linux),y)
 ALL_TARGETS += init-xenstore-domain
@@ -72,10 +60,10 @@ endif
 init-xenstore-domain.o: CFLAGS += $(CFLAGS_libxenguest)
 
 init-xenstore-domain: init-xenstore-domain.o $(LIBXENSTORE)
-	$(CC) $(LDFLAGS) $^ $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) -o $@ $(APPEND_LDFLAGS)
+	$(CC) $(LDFLAGS) $^ $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) $(call LDFLAGS_RPATH,../lib) -o $@ $(APPEND_LDFLAGS)
 
 xenstored: $(XENSTORED_OBJS)
-	$(CC) $(LDFLAGS) $^ $(LDLIBS_libxenctrl) $(SOCKET_LIBS) -o $@ $(APPEND_LDFLAGS)
+	$(CC) $(LDFLAGS) $^ $(LDLIBS_libxenctrl) $(SOCKET_LIBS) $(call LDFLAGS_RPATH,../lib) -o $@ $(APPEND_LDFLAGS)
 
 xenstored.a: $(XENSTORED_OBJS)
 	$(AR) cr $@ $^
@@ -100,7 +88,7 @@ libxenstore.so.$(MAJOR): libxenstore.so.$(MAJOR).$(MINOR)
 xs.opic: CFLAGS += -DUSE_PTHREAD
 
 libxenstore.so.$(MAJOR).$(MINOR): xs.opic xs_lib.opic
-	$(CC) $(LDFLAGS) $(PTHREAD_LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenstore.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $^ $(SOCKET_LIBS) $(PTHREAD_LIBS) $(APPEND_LDFLAGS)
+	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenstore.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $^ $(SOCKET_LIBS) -lpthread $(APPEND_LDFLAGS)
 
 libxenstore.a: xs.o xs_lib.o
 	$(AR) rcs $@ $^
@@ -123,21 +111,20 @@ tarball: clean
 
 .PHONY: install
 install: all
-	$(INSTALL_DIR) $(DESTDIR)$(BINDIR)
+	$(INSTALL_DIR) $(DESTDIR)$(PRIVATE_BINDIR)
 	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
 	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)
 	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)/xenstore-compat
-ifeq ($(XENSTORE_XENSTORED),y)
+	$(INSTALL_DIR) $(DESTDIR)/var/run/xenstored
 	$(INSTALL_DIR) $(DESTDIR)/var/lib/xenstored
-	$(INSTALL_PROG) xenstored $(DESTDIR)$(SBINDIR)
-endif
-	$(INSTALL_PROG) xenstore-control $(DESTDIR)$(BINDIR)
-	$(INSTALL_PROG) xenstore $(DESTDIR)$(BINDIR)
+	$(INSTALL_PROG) xenstored $(DESTDIR)$(PRIVATE_BINDIR)
+	$(INSTALL_PROG) xenstore-control $(DESTDIR)$(PRIVATE_BINDIR)
+	$(INSTALL_PROG) xenstore $(DESTDIR)$(SBINDIR)
 	set -e ; for c in $(CLIENTS) ; do \
-		ln -f $(DESTDIR)$(BINDIR)/xenstore $(DESTDIR)$(BINDIR)/$${c} ; \
+		ln -f xenstore $(DESTDIR)$(SBINDIR)/$${c} ; \
 	done
 	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR)
-	$(INSTALL_SHLIB) libxenstore.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
+	$(INSTALL_PROG) libxenstore.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
 	ln -sf libxenstore.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)/libxenstore.so.$(MAJOR)
 	ln -sf libxenstore.so.$(MAJOR) $(DESTDIR)$(LIBDIR)/libxenstore.so
 	$(INSTALL_DATA) libxenstore.a $(DESTDIR)$(LIBDIR)

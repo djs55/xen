@@ -37,16 +37,12 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <assert.h>
-#include <sys/types.h>
 #if defined(__NetBSD__) || defined(__OpenBSD__)
 #include <util.h>
 #elif defined(__linux__)
 #include <pty.h>
 #elif defined(__sun__)
 #include <stropts.h>
-#elif defined(__FreeBSD__)
-#include <sys/ioctl.h>
-#include <libutil.h>
 #endif
 
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
@@ -276,8 +272,8 @@ static int create_hv_log(void)
 		dolog(LOG_ERR, "Failed to open log %s: %d (%s)",
 		      logfile, errno, strerror(errno));
 	if (fd != -1 && log_time_hv) {
-		if (write_with_timestamp(fd, "Logfile Opened\n",
-					 strlen("Logfile Opened\n"),
+		if (write_with_timestamp(fd, "Logfile Opened",
+					 strlen("Logfile Opened"),
 					 &log_time_hv_needts) < 0) {
 			dolog(LOG_ERR, "Failed to log opening timestamp "
 				       "in %s: %d (%s)", logfile, errno,
@@ -322,8 +318,8 @@ static int create_domain_log(struct domain *dom)
 		dolog(LOG_ERR, "Failed to open log %s: %d (%s)",
 		      logfile, errno, strerror(errno));
 	if (fd != -1 && log_time_guest) {
-		if (write_with_timestamp(fd, "Logfile Opened\n",
-					 strlen("Logfile Opened\n"),
+		if (write_with_timestamp(fd, "Logfile Opened",
+					 strlen("Logfile Opened"),
 					 &log_time_guest_needts) < 0) {
 			dolog(LOG_ERR, "Failed to log opening timestamp "
 				       "in %s: %d (%s)", logfile, errno,
@@ -907,26 +903,19 @@ static void handle_xs(void)
 	free(vec);
 }
 
-static void handle_hv_logs(xc_evtchn *xce_handle, bool force)
+static void handle_hv_logs(xc_evtchn *xce_handle)
 {
-	static char buffer[1024*16];
+	char buffer[1024*16];
 	char *bufptr = buffer;
-	unsigned int size;
+	unsigned int size = sizeof(buffer);
 	static uint32_t index = 0;
-	evtchn_port_or_error_t port = -1;
+	evtchn_port_or_error_t port;
 
-	if (!force && ((port = xc_evtchn_pending(xce_handle)) == -1))
+	if ((port = xc_evtchn_pending(xce_handle)) == -1)
 		return;
 
-	do
-	{
+	if (xc_readconsolering(xc, bufptr, &size, 0, 1, &index) == 0 && size > 0) {
 		int logret;
-
-		size = sizeof(buffer);
-		if (xc_readconsolering(xc, bufptr, &size, 0, 1, &index) != 0 ||
-		    size == 0)
-			break;
-
 		if (log_time_hv)
 			logret = write_with_timestamp(log_hv_fd, buffer, size,
 						      &log_time_hv_needts);
@@ -936,10 +925,9 @@ static void handle_hv_logs(xc_evtchn *xce_handle, bool force)
 		if (logret < 0)
 			dolog(LOG_ERR, "Failed to write hypervisor log: "
 				       "%d (%s)", errno, strerror(errno));
-	} while (size == sizeof(buffer));
+	}
 
-	if (port != -1)
-		(void)xc_evtchn_unmask(xce_handle, port);
+	(void)xc_evtchn_unmask(xce_handle, port);
 }
 
 static void handle_log_reload(void)
@@ -1025,8 +1013,6 @@ void handle_io(void)
 			      "%d (%s)", errno, strerror(errno));
 			goto out;
 		}
-		/* Log the boot dmesg even if VIRQ_CON_RING isn't pending. */
-		handle_hv_logs(xce_handle, true);
 	}
 
 	xcg_handle = xc_gnttab_open(NULL, 0);
@@ -1137,7 +1123,7 @@ void handle_io(void)
 				      errno, strerror(errno));
 				break;
 			} else if (fds[xce_pollfd_idx].revents & POLLIN)
-				handle_hv_logs(xce_handle, false);
+				handle_hv_logs(xce_handle);
 
 			xce_pollfd_idx = -1;
 		}

@@ -41,7 +41,8 @@ static void helper_done(libxl__egc *egc, libxl__save_helper_state *shs);
 /*----- entrypoints -----*/
 
 void libxl__xc_domain_restore(libxl__egc *egc, libxl__domain_create_state *dcs,
-                              int hvm, int pae, int superpages)
+                              int hvm, int pae, int superpages,
+                              int no_incr_generationid)
 {
     STATE_AO_GC(dcs->ao);
 
@@ -58,7 +59,7 @@ void libxl__xc_domain_restore(libxl__egc *egc, libxl__domain_create_state *dcs,
         state->store_port,
         state->store_domid, state->console_port,
         state->console_domid,
-        hvm, pae, superpages,
+        hvm, pae, superpages, no_incr_generationid,
         cbflags, dcs->checkpointed_stream,
     };
 
@@ -74,7 +75,8 @@ void libxl__xc_domain_restore(libxl__egc *egc, libxl__domain_create_state *dcs,
                argnums, ARRAY_SIZE(argnums));
 }
 
-void libxl__xc_domain_save(libxl__egc *egc, libxl__domain_suspend_state *dss)
+void libxl__xc_domain_save(libxl__egc *egc, libxl__domain_suspend_state *dss,
+                           unsigned long vm_generationid_addr)
 {
     STATE_AO_GC(dss->ao);
     int r, rc, toolstack_data_fd = -1;
@@ -103,14 +105,10 @@ void libxl__xc_domain_save(libxl__egc *egc, libxl__domain_suspend_state *dss)
                                 toolstack_data_buf, toolstack_data_len,
                                 "toolstack data tmpfile", 0);
         if (r) { rc = ERROR_FAIL; goto out; }
-
-        /* file position must be reset before passing to libxl-save-helper. */
-        r = lseek(toolstack_data_fd, 0, SEEK_SET);
-        if (r) { rc = ERROR_FAIL; goto out; }
     }
 
     const unsigned long argnums[] = {
-        dss->domid, 0, 0, dss->xcflags, dss->hvm,
+        dss->domid, 0, 0, dss->xcflags, dss->hvm, vm_generationid_addr,
         toolstack_data_fd, toolstack_data_len,
         cbflags,
     };
@@ -187,11 +185,7 @@ static void run_helper(libxl__egc *egc, libxl__save_helper_state *shs,
     for (childfd=0; childfd<2; childfd++) {
         /* Setting up the pipe for the child's fd childfd */
         int fds[2];
-        if (libxl_pipe(CTX,fds)) {
-            rc = ERROR_FAIL;
-            libxl__carefd_unlock();
-            goto out;
-        }
+        if (libxl_pipe(CTX,fds)) { rc = ERROR_FAIL; goto out; }
         int childs_end = childfd==0 ? 0 /*read*/  : 1 /*write*/;
         int our_end    = childfd==0 ? 1 /*write*/ : 0 /*read*/;
         childs_pipes[childfd] = libxl__carefd_record(CTX, fds[childs_end]);

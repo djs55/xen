@@ -133,12 +133,12 @@ void startup_cpu_idle_loop(void)
     reset_stack_and_jump(idle_loop);
 }
 
-static void noreturn continue_idle_domain(struct vcpu *v)
+static void continue_idle_domain(struct vcpu *v)
 {
     reset_stack_and_jump(idle_loop);
 }
 
-static void noreturn continue_nonidle_domain(struct vcpu *v)
+static void continue_nonidle_domain(struct vcpu *v)
 {
     check_wakeup_from_wait();
     mark_regs_dirty(guest_cpu_user_regs());
@@ -180,36 +180,6 @@ void dump_pageframe_info(struct domain *d)
     spin_unlock(&d->page_alloc_lock);
 }
 
-smap_check_policy_t smap_policy_change(struct vcpu *v,
-    smap_check_policy_t new_policy)
-{
-    smap_check_policy_t old_policy = v->arch.smap_check_policy;
-    v->arch.smap_check_policy = new_policy;
-    return old_policy;
-}
-
-/*
- * The hole may be at or above the 44-bit boundary, so we need to determine
- * the total bit count until reaching 32 significant (not squashed out) bits
- * in PFN representations.
- * Note that the way "bits" gets initialized/updated/bounds-checked guarantees
- * that the function will never return zero, and hence will never be called
- * more than once (which is important due to it being deliberately placed in
- * .init.text).
- */
-static unsigned int __init noinline _domain_struct_bits(void)
-{
-    unsigned int bits = 32 + PAGE_SHIFT;
-    unsigned int sig = hweight32(~pfn_hole_mask);
-    unsigned int mask = pfn_hole_mask >> 32;
-
-    for ( ; bits < BITS_PER_LONG && sig < 32; ++bits, mask >>= 1 )
-        if ( !(mask & 1) )
-            ++sig;
-
-    return bits;
-}
-
 struct domain *alloc_domain_struct(void)
 {
     struct domain *d;
@@ -217,10 +187,7 @@ struct domain *alloc_domain_struct(void)
      * We pack the PDX of the domain structure into a 32-bit field within
      * the page_info structure. Hence the MEMF_bits() restriction.
      */
-    static unsigned int __read_mostly bits;
-
-    if ( unlikely(!bits) )
-         bits = _domain_struct_bits();
+    unsigned int bits = 32 + PAGE_SHIFT + pfn_pdx_hole_shift;
 
     BUILD_BUG_ON(sizeof(*d) > PAGE_SIZE);
     d = alloc_xenheap_pages(0, MEMF_bits(bits));
@@ -415,9 +382,6 @@ int vcpu_initialise(struct vcpu *v)
 
     v->arch.flags = TF_kernel_mode;
 
-    /* By default, do not emulate */
-    v->arch.mem_event.emulate_flags = 0;
-
     rc = mapcache_vcpu_init(v);
     if ( rc )
         return rc;
@@ -458,6 +422,10 @@ int vcpu_initialise(struct vcpu *v)
 
         /* PV guests by default have a 100Hz ticker. */
         v->periodic_period = MILLISECS(10);
+
+        /* PV guests get an emulated PIT too for video BIOSes to use. */
+        if ( v->vcpu_id == 0 )
+            pit_init(v, cpu_khz);
     }
 
     v->arch.schedule_tail = continue_nonidle_domain;
@@ -560,7 +528,7 @@ int arch_domain_create(struct domain *d, unsigned int domcr_flags)
 
     if ( !is_idle_domain(d) )
     {
-        d->arch.cpuids = xmalloc_array(cpuid_input_t, MAX_CPUID_INPUT);
+        d->arch.cpuids = xzalloc_array(cpuid_input_t, MAX_CPUID_INPUT);
         rc = -ENOMEM;
         if ( d->arch.cpuids == NULL )
             goto fail;
@@ -611,9 +579,6 @@ int arch_domain_create(struct domain *d, unsigned int domcr_flags)
     tsc_set_info(d, TSC_MODE_DEFAULT, 0UL, 0, 0);
     spin_lock_init(&d->arch.vtsc_lock);
 
-    /* PV/PVH guests get an emulated PIT too for video BIOSes to use. */
-    pit_init(d, cpu_khz);
-
     return 0;
 
  fail:
@@ -662,9 +627,9 @@ unsigned long pv_guest_cr4_fixup(const struct vcpu *v, unsigned long guest_cr4)
         hv_cr4_mask &= ~X86_CR4_OSXSAVE;
 
     if ( (guest_cr4 & hv_cr4_mask) != (hv_cr4 & hv_cr4_mask) )
-        printk(XENLOG_G_WARNING
-               "d%d attempted to change %pv's CR4 flags %08lx -> %08lx\n",
-               current->domain->domain_id, v, hv_cr4, guest_cr4);
+        gdprintk(XENLOG_WARNING,
+                 "Attempt to change CR4 flags %08lx -> %08lx\n",
+                 hv_cr4, guest_cr4);
 
     return (hv_cr4 & hv_cr4_mask) | (guest_cr4 & ~hv_cr4_mask);
 }
@@ -940,8 +905,8 @@ int arch_set_info_guest(
         switch ( rc )
         {
         case -EINTR:
-            rc = -ERESTART;
-        case -ERESTART:
+            rc = -EAGAIN;
+        case -EAGAIN:
         case 0:
             break;
         default:
@@ -968,8 +933,8 @@ int arch_set_info_guest(
                 switch ( rc )
                 {
                 case -EINTR:
-                    rc = -ERESTART;
-                case -ERESTART:
+                    rc = -EAGAIN;
+                case -EAGAIN:
                     v->arch.old_guest_table =
                         pagetable_get_page(v->arch.guest_table);
                     v->arch.guest_table = pagetable_null();
@@ -1352,7 +1317,14 @@ static void paravirt_ctxt_switch_to(struct vcpu *v)
         write_cr4(cr4);
 
     if ( unlikely(v->arch.debugreg[7] & DR7_ACTIVE_MASK) )
-        activate_debugregs(v);
+    {
+        write_debugreg(0, v->arch.debugreg[0]);
+        write_debugreg(1, v->arch.debugreg[1]);
+        write_debugreg(2, v->arch.debugreg[2]);
+        write_debugreg(3, v->arch.debugreg[3]);
+        write_debugreg(6, v->arch.debugreg[6]);
+        write_debugreg(7, v->arch.debugreg[7]);
+    }
 
     if ( (v->domain->arch.tsc_mode ==  TSC_MODE_PVRDTSCP) &&
          boot_cpu_has(X86_FEATURE_RDTSCP) )
@@ -1360,15 +1332,10 @@ static void paravirt_ctxt_switch_to(struct vcpu *v)
 }
 
 /* Update per-VCPU guest runstate shared memory area (if registered). */
-bool_t update_runstate_area(struct vcpu *v)
+bool_t update_runstate_area(const struct vcpu *v)
 {
-    bool_t rc;
-    smap_check_policy_t smap_policy;
-
     if ( guest_handle_is_null(runstate_guest(v)) )
         return 1;
-
-    smap_policy = smap_policy_change(v, SMAP_CHECK_ENABLED);
 
     if ( has_32bit_shinfo(v->domain) )
     {
@@ -1376,15 +1343,11 @@ bool_t update_runstate_area(struct vcpu *v)
 
         XLAT_vcpu_runstate_info(&info, &v->runstate);
         __copy_to_guest(v->runstate_guest.compat, &info, 1);
-        rc = 1;
+        return 1;
     }
-    else
-        rc = __copy_to_guest(runstate_guest(v), &v->runstate, 1) !=
-             sizeof(v->runstate);
 
-    smap_policy_change(v, smap_policy);
-
-    return rc;
+    return __copy_to_guest(runstate_guest(v), &v->runstate, 1) !=
+           sizeof(v->runstate);
 }
 
 static void _update_runstate_area(struct vcpu *v)
@@ -1542,8 +1505,7 @@ void context_switch(struct vcpu *prev, struct vcpu *next)
         }
 
         set_cpuid_faulting(is_pv_vcpu(next) &&
-                           !is_control_domain(next->domain) &&
-                           !is_hardware_domain(next->domain));
+                           (next->domain->domain_id != 0));
     }
 
     if (is_hvm_vcpu(next) && (prev != next) )
@@ -1559,11 +1521,13 @@ void context_switch(struct vcpu *prev, struct vcpu *next)
     update_vcpu_system_time(next);
 
     schedule_tail(next);
+    BUG();
 }
 
 void continue_running(struct vcpu *same)
 {
     schedule_tail(same);
+    BUG();
 }
 
 int __sync_local_execstate(void)
@@ -1828,9 +1792,9 @@ static int relinquish_memory(
         {
         case 0:
             break;
-        case -ERESTART:
+        case -EAGAIN:
         case -EINTR:
-            ret = -ERESTART;
+            ret = -EAGAIN;
             page_list_add(page, list);
             set_bit(_PGT_pinned, &page->u.inuse.type_info);
             put_page(page);
@@ -1875,9 +1839,9 @@ static int relinquish_memory(
                     if ( x & PGT_partial )
                         put_page(page);
                     put_page(page);
-                    ret = -ERESTART;
+                    ret = -EAGAIN;
                     goto out;
-                case -ERESTART:
+                case -EAGAIN:
                     page_list_add(page, list);
                     page->u.inuse.type_info |= PGT_partial;
                     if ( x & PGT_partial )
@@ -1901,7 +1865,7 @@ static int relinquish_memory(
 
         if ( hypercall_preempt_check() )
         {
-            ret = -ERESTART;
+            ret = -EAGAIN;
             goto out;
         }
     }
@@ -1948,14 +1912,15 @@ int domain_relinquish_resources(struct domain *d)
                  */
                 destroy_gdt(v);
             }
-        }
 
-        if ( d->arch.pirq_eoi_map != NULL )
-        {
-            unmap_domain_page_global(d->arch.pirq_eoi_map);
-            put_page_and_type(mfn_to_page(d->arch.pirq_eoi_map_mfn));
-            d->arch.pirq_eoi_map = NULL;
-            d->arch.auto_unmask = 0;
+            if ( d->arch.pv_domain.pirq_eoi_map != NULL )
+            {
+                unmap_domain_page_global(d->arch.pv_domain.pirq_eoi_map);
+                put_page_and_type(
+                    mfn_to_page(d->arch.pv_domain.pirq_eoi_map_mfn));
+                d->arch.pv_domain.pirq_eoi_map = NULL;
+                d->arch.pv_domain.auto_unmask = 0;
+            }
         }
 
         d->arch.relmem = RELMEM_shared;
@@ -2014,8 +1979,6 @@ int domain_relinquish_resources(struct domain *d)
     default:
         BUG();
     }
-
-    pit_deinit(d);
 
     if ( has_hvm_container_domain(d) )
         hvm_domain_relinquish_resources(d);

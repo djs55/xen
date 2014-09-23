@@ -231,7 +231,7 @@ class _GrubConfigFile(object):
         if val == "saved":
             self._default = 0
         else:
-            self._default = val
+            self._default = int(val)
 
         if self._default < 0:
             raise ValueError, "default must be positive number"
@@ -348,9 +348,7 @@ class Grub2Image(_GrubImage):
                 
     commands = {'set:root': 'root',
                 'linux': 'kernel',
-                'linux16': 'kernel',
                 'initrd': 'initrd',
-                'initrd16': 'initrd',
                 'echo': None,
                 'insmod': None,
                 'search': None}
@@ -396,7 +394,7 @@ class Grub2ConfigFile(_GrubConfigFile):
                 continue
 
             # new image
-            title_match = re.match('^menuentry ["\'](.*?)["\'] (.*){', l)
+            title_match = re.match('^menuentry ["\'](.*)["\'] (.*){', l)
             if title_match:
                 if img is not None:
                     raise RuntimeError, "syntax error: cannot nest menuentry (%d %s)" % (len(img),img)
@@ -431,11 +429,11 @@ class Grub2ConfigFile(_GrubConfigFile):
                 
             if self.commands.has_key(com):
                 if self.commands[com] is not None:
-                    arg_strip = arg.strip()
-                    if arg_strip == "${saved_entry}" or arg_strip == "${next_entry}":
-                        logging.warning("grub2's saved_entry/next_entry not supported")
+                    if arg.strip() == "${saved_entry}":
                         arg = "0"
-                    setattr(self, self.commands[com], arg_strip)
+                    elif arg.strip() == "${next_entry}":
+                        arg = "0"
+                    setattr(self, self.commands[com], arg.strip())
                 else:
                     logging.info("Ignored directive %s" %(com,))
             elif com.startswith('set:'):

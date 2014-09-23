@@ -39,14 +39,10 @@
 #include <asm/page.h>
 #include <asm/current.h>
 #include <asm/setup.h>
+#include <asm/early_printk.h>
 #include <asm/gic.h>
 #include <asm/cpufeature.h>
 #include <asm/platform.h>
-#include <asm/procinfo.h>
-#include <asm/setup.h>
-#include <xsm/xsm.h>
-
-struct bootinfo __initdata bootinfo;
 
 struct cpuinfo_arm __read_mostly boot_cpu_data;
 
@@ -103,10 +99,9 @@ static void __init processor_id(void)
            cpu_has_el2_32 ? "64+32" : cpu_has_el2_64 ? "64" : "No",
            cpu_has_el1_32 ? "64+32" : cpu_has_el1_64 ? "64" : "No",
            cpu_has_el0_32 ? "64+32" : cpu_has_el0_64 ? "64" : "No");
-    printk("    Extensions:%s%s%s\n",
+    printk("    Extensions:%s%s\n",
            cpu_has_fp ? " FloatingPoint" : "",
-           cpu_has_simd ? " AdvancedSIMD" : "",
-           cpu_has_gicv3 ? " GICv3-SysReg" : "");
+           cpu_has_simd ? " AdvancedSIMD" : "");
 
     printk("  Debug Features: %016"PRIx64" %016"PRIx64"\n",
            boot_cpu_data.dbg64.bits[0], boot_cpu_data.dbg64.bits[1]);
@@ -154,8 +149,6 @@ static void __init processor_id(void)
     {
         printk("32-bit Execution: Unsupported\n");
     }
-
-    processor_setup();
 }
 
 static void dt_unreserved_regions(paddr_t s, paddr_t e,
@@ -184,75 +177,15 @@ static void dt_unreserved_regions(paddr_t s, paddr_t e,
     cb(s, e);
 }
 
-struct bootmodule *add_boot_module(bootmodule_kind kind,
-                                   paddr_t start, paddr_t size,
-                                   const char *cmdline)
-{
-    struct bootmodules *mods = &bootinfo.modules;
-    struct bootmodule *mod;
-
-    if ( mods->nr_mods == MAX_MODULES )
-    {
-        printk("Ignoring %s boot module at %"PRIpaddr"-%"PRIpaddr" (too many)\n",
-               boot_module_kind_as_string(kind), start, start + size);
-        return NULL;
-    }
-
-    mod = &mods->module[mods->nr_mods++];
-    mod->kind = kind;
-    mod->start = start;
-    mod->size = size;
-    if ( cmdline )
-        safe_strcpy(mod->cmdline, cmdline);
-    else
-        mod->cmdline[0] = 0;
-
-    return mod;
-}
-
-struct bootmodule * __init boot_module_find_by_kind(bootmodule_kind kind)
-{
-    struct bootmodules *mods = &bootinfo.modules;
-    struct bootmodule *mod;
-    int i;
-    for (i = 0 ; i < mods->nr_mods ; i++ )
-    {
-        mod = &mods->module[i];
-        if ( mod->kind == kind )
-            return mod;
-    }
-    return NULL;
-}
-
-const char * __init boot_module_kind_as_string(bootmodule_kind kind)
-{
-    switch ( kind )
-    {
-    case BOOTMOD_XEN:     return "Xen";
-    case BOOTMOD_FDT:     return "Device Tree";
-    case BOOTMOD_KERNEL:  return "Kernel";
-    case BOOTMOD_RAMDISK: return "Ramdisk";
-    case BOOTMOD_XSM:     return "XSM";
-    case BOOTMOD_UNKNOWN: return "Unknown";
-    default: BUG();
-    }
-}
-
 void __init discard_initial_modules(void)
 {
-    struct bootmodules *mi = &bootinfo.modules;
+    struct dt_module_info *mi = &early_info.modules;
     int i;
 
-    for ( i = 0; i <= mi->nr_mods; i++ )
+    for ( i = MOD_DISCARD_FIRST; i <= mi->nr_mods; i++ )
     {
         paddr_t s = mi->module[i].start;
         paddr_t e = s + PAGE_ALIGN(mi->module[i].size);
-
-        if ( mi->module[i].kind == BOOTMOD_XEN )
-            continue;
-
-        if ( !mfn_valid(paddr_to_pfn(s)) || !mfn_valid(paddr_to_pfn(e)))
-            continue;
 
         dt_unreserved_regions(s, e, init_domheap_pages, 0);
     }
@@ -274,7 +207,7 @@ static paddr_t __init consider_modules(paddr_t s, paddr_t e,
                                        uint32_t size, paddr_t align,
                                        int first_mod)
 {
-    const struct bootmodules *mi = &bootinfo.modules;
+    const struct dt_module_info *mi = &early_info.modules;
     int i;
     int nr_rsvd;
 
@@ -339,7 +272,7 @@ static paddr_t __init consider_modules(paddr_t s, paddr_t e,
  */
 static paddr_t __init next_module(paddr_t s, paddr_t *end)
 {
-    struct bootmodules *mi = &bootinfo.modules;
+    struct dt_module_info *mi = &early_info.modules;
     paddr_t lowest = ~(paddr_t)0;
     int i;
 
@@ -347,9 +280,6 @@ static paddr_t __init next_module(paddr_t s, paddr_t *end)
     {
         paddr_t mod_s = mi->module[i].start;
         paddr_t mod_e = mod_s + mi->module[i].size;
-
-        if ( !mi->module[i].size )
-            continue;
 
         if ( mod_s < s )
             continue;
@@ -372,7 +302,7 @@ static paddr_t __init next_module(paddr_t s, paddr_t *end)
  */
 static paddr_t __init get_xen_paddr(void)
 {
-    struct meminfo *mi = &bootinfo.mem;
+    struct dt_mem_info *mi = &early_info.mem;
     paddr_t min_size;
     paddr_t paddr = 0, last_end;
     int i;
@@ -396,7 +326,7 @@ static paddr_t __init get_xen_paddr(void)
         if ( bank->size >= min_size )
         {
             e = consider_modules(bank->start, bank->start + bank->size,
-                                 min_size, XEN_PADDR_ALIGN, 0);
+                                 min_size, XEN_PADDR_ALIGN, 1);
             if ( !e )
                 continue;
 
@@ -416,10 +346,13 @@ static paddr_t __init get_xen_paddr(void)
     }
 
     if ( !paddr )
-        panic("Not enough memory to relocate Xen");
+        early_panic("Not enough memory to relocate Xen");
 
-    printk("Placing Xen at 0x%"PRIpaddr"-0x%"PRIpaddr"\n",
-           paddr, paddr + min_size);
+    early_printk("Placing Xen at 0x%"PRIpaddr"-0x%"PRIpaddr"\n",
+                 paddr, paddr + min_size);
+
+    early_info.modules.module[MOD_XEN].start = paddr;
+    early_info.modules.module[MOD_XEN].size = min_size;
 
     return paddr;
 }
@@ -437,8 +370,8 @@ static void __init setup_mm(unsigned long dtb_paddr, size_t dtb_size)
     int i;
     void *fdt;
 
-    if ( !bootinfo.mem.nr_banks )
-        panic("No memory bank");
+    if ( !early_info.mem.nr_banks )
+        early_panic("No memory bank");
 
     /*
      * We are going to accumulate two regions here.
@@ -454,15 +387,15 @@ static void __init setup_mm(unsigned long dtb_paddr, size_t dtb_size)
      * We also track the number of actual RAM pages (i.e. not counting
      * the holes).
      */
-    ram_size  = bootinfo.mem.bank[0].size;
+    ram_size  = early_info.mem.bank[0].size;
 
-    contig_start = ram_start = bootinfo.mem.bank[0].start;
+    contig_start = ram_start = early_info.mem.bank[0].start;
     contig_end   = ram_end = ram_start + ram_size;
 
-    for ( i = 1; i < bootinfo.mem.nr_banks; i++ )
+    for ( i = 1; i < early_info.mem.nr_banks; i++ )
     {
-        paddr_t bank_start = bootinfo.mem.bank[i].start;
-        paddr_t bank_size = bootinfo.mem.bank[i].size;
+        paddr_t bank_start = early_info.mem.bank[i].start;
+        paddr_t bank_size = early_info.mem.bank[i].size;
         paddr_t bank_end = bank_start + bank_size;
 
         paddr_t new_ram_size = ram_size + bank_size;
@@ -495,11 +428,11 @@ static void __init setup_mm(unsigned long dtb_paddr, size_t dtb_size)
         ram_end = new_ram_end;
     }
 
-    if ( i != bootinfo.mem.nr_banks )
+    if ( i != early_info.mem.nr_banks )
     {
-        printk("WARNING: only using %d out of %d memory banks\n",
-               i, bootinfo.mem.nr_banks);
-        bootinfo.mem.nr_banks = i;
+        early_printk("WARNING: only using %d out of %d memory banks\n",
+                     i, early_info.mem.nr_banks);
+        early_info.mem.nr_banks = i;
     }
 
     total_pages = ram_pages = ram_size >> PAGE_SHIFT;
@@ -532,13 +465,14 @@ static void __init setup_mm(unsigned long dtb_paddr, size_t dtb_size)
     } while ( xenheap_pages > 128<<(20-PAGE_SHIFT) );
 
     if ( ! e )
-        panic("Not not enough space for xenheap");
+        early_panic("Not not enough space for xenheap");
 
     domheap_pages = heap_pages - xenheap_pages;
 
-    printk("Xen heap: %"PRIpaddr"-%"PRIpaddr" (%lu pages)\n",
-            e - (pfn_to_paddr(xenheap_pages)), e, xenheap_pages);
-    printk("Dom heap: %lu pages\n", domheap_pages);
+    early_printk("Xen heap: %"PRIpaddr"-%"PRIpaddr" (%lu pages)\n",
+                 e - (pfn_to_paddr(xenheap_pages)), e,
+                 xenheap_pages);
+    early_printk("Dom heap: %lu pages\n", domheap_pages);
 
     setup_xenheap_mappings((e >> PAGE_SHIFT) - xenheap_pages, xenheap_pages);
 
@@ -554,14 +488,14 @@ static void __init setup_mm(unsigned long dtb_paddr, size_t dtb_size)
 
     /* Copy the DTB. */
     fdt = mfn_to_virt(alloc_boot_pages(dtb_pages, 1));
-    copy_from_paddr(fdt, dtb_paddr, dtb_size);
+    copy_from_paddr(fdt, dtb_paddr, dtb_size, BUFFERABLE);
     device_tree_flattened = fdt;
 
     /* Add non-xenheap memory */
-    for ( i = 0; i < bootinfo.mem.nr_banks; i++ )
+    for ( i = 0; i < early_info.mem.nr_banks; i++ )
     {
-        paddr_t bank_start = bootinfo.mem.bank[i].start;
-        paddr_t bank_end = bank_start + bootinfo.mem.bank[i].size;
+        paddr_t bank_start = early_info.mem.bank[i].start;
+        paddr_t bank_end = bank_start + early_info.mem.bank[i].size;
 
         s = bank_start;
         while ( s < bank_end )
@@ -618,10 +552,10 @@ static void __init setup_mm(unsigned long dtb_paddr, size_t dtb_size)
     void *fdt;
 
     total_pages = 0;
-    for ( bank = 0 ; bank < bootinfo.mem.nr_banks; bank++ )
+    for ( bank = 0 ; bank < early_info.mem.nr_banks; bank++ )
     {
-        paddr_t bank_start = bootinfo.mem.bank[bank].start;
-        paddr_t bank_size = bootinfo.mem.bank[bank].size;
+        paddr_t bank_start = early_info.mem.bank[bank].start;
+        paddr_t bank_size = early_info.mem.bank[bank].size;
         paddr_t bank_end = bank_start + bank_size;
         paddr_t s, e;
 
@@ -670,11 +604,11 @@ static void __init setup_mm(unsigned long dtb_paddr, size_t dtb_size)
         }
     }
 
-    if ( bank != bootinfo.mem.nr_banks )
+    if ( bank != early_info.mem.nr_banks )
     {
-        printk("WARNING: only using %d out of %d memory banks\n",
-               bank, bootinfo.mem.nr_banks);
-        bootinfo.mem.nr_banks = bank;
+        early_printk("WARNING: only using %d out of %d memory banks\n",
+                     bank, early_info.mem.nr_banks);
+        early_info.mem.nr_banks = bank;
     }
 
     total_pages += ram_size >> PAGE_SHIFT;
@@ -691,7 +625,7 @@ static void __init setup_mm(unsigned long dtb_paddr, size_t dtb_size)
 
     /* Copy the DTB. */
     fdt = mfn_to_virt(alloc_boot_pages(dtb_pages, 1));
-    copy_from_paddr(fdt, dtb_paddr, dtb_size);
+    copy_from_paddr(fdt, dtb_paddr, dtb_size, BUFFERABLE);
     device_tree_flattened = fdt;
 
     setup_frametable_mappings(ram_start, ram_end);
@@ -723,55 +657,30 @@ void __init start_xen(unsigned long boot_phys_offset,
 {
     size_t fdt_size;
     int cpus, i;
-    paddr_t xen_paddr;
     const char *cmdline;
-    struct bootmodule *xen_bootmodule;
-    struct domain *dom0;
 
     setup_cache();
 
     percpu_init_areas();
     set_processor_id(0); /* needed early, for smp_processor_id() */
 
-    set_current((struct vcpu *)0xfffff000); /* debug sanity */
-    idle_vcpu[0] = current;
-
-    /* Initialize traps early allow us to get backtrace when an error occurred */
-    init_traps();
-
     smp_clear_cpu_maps();
 
     /* This is mapped by head.S */
     device_tree_flattened = (void *)BOOT_FDT_VIRT_START
         + (fdt_paddr & ((1 << SECOND_SHIFT) - 1));
-    fdt_size = boot_fdt_info(device_tree_flattened, fdt_paddr);
+    fdt_size = device_tree_early_init(device_tree_flattened, fdt_paddr);
 
-    cmdline = boot_fdt_cmdline(device_tree_flattened);
-    printk("Command line: %s\n", cmdline);
+    cmdline = device_tree_bootargs(device_tree_flattened);
+    early_printk("Command line: %s\n", cmdline);
     cmdline_parse(cmdline);
 
-    /* Register Xen's load address as a boot module. */
-    xen_bootmodule = add_boot_module(BOOTMOD_XEN,
-                             (paddr_t)(uintptr_t)(_start + boot_phys_offset),
-                             (paddr_t)(uintptr_t)(_end - _start + 1), NULL);
-    BUG_ON(!xen_bootmodule);
-
-    xen_paddr = get_xen_paddr();
-    setup_pagetables(boot_phys_offset, xen_paddr);
-
-    /* Update Xen's address now that we have relocated. */
-    printk("Update BOOTMOD_XEN from %"PRIpaddr"-%"PRIpaddr" => %"PRIpaddr"-%"PRIpaddr"\n",
-           xen_bootmodule->start, xen_bootmodule->start + xen_bootmodule->size,
-           xen_paddr, xen_paddr + xen_bootmodule->size);
-    xen_bootmodule->start = xen_paddr;
-
+    setup_pagetables(boot_phys_offset, get_xen_paddr());
     setup_mm(fdt_paddr, fdt_size);
 
     vm_init();
     dt_unflatten_host_device_tree();
     dt_irq_xlate = gic_irq_xlate;
-
-    init_IRQ();
 
     dt_uart_init();
     console_init_preirq();
@@ -789,6 +698,11 @@ void __init start_xen(unsigned long boot_phys_offset,
 
     gic_init();
 
+    set_current((struct vcpu *)0xfffff000); /* debug sanity */
+    idle_vcpu[0] = current;
+
+    init_traps();
+
     setup_virt_paging();
 
     p2m_vmid_allocator_init();
@@ -797,8 +711,10 @@ void __init start_xen(unsigned long boot_phys_offset,
 
     tasklet_subsys_init();
 
+    init_IRQ();
 
-    xsm_dt_init();
+    gic_route_ppis();
+    gic_route_spis();
 
     init_maintenance_interrupt();
     init_timer_interrupt();
@@ -813,8 +729,6 @@ void __init start_xen(unsigned long boot_phys_offset,
 
     local_irq_enable();
     local_abort_enable();
-
-    iommu_setup();
 
     smp_prepare_cpus(cpus);
 
@@ -841,7 +755,7 @@ void __init start_xen(unsigned long boot_phys_offset,
 
     /* Create initial domain 0. */
     dom0 = domain_create(0, 0, 0);
-    if ( IS_ERR(dom0) || (alloc_dom0_vcpu0(dom0) == NULL) )
+    if ( IS_ERR(dom0) || (alloc_dom0_vcpu0() == NULL) )
             panic("Error creating domain 0");
 
     dom0->is_privileged = 1;

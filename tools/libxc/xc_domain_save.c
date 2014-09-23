@@ -25,7 +25,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/time.h>
-#include <assert.h>
 
 #include "xc_private.h"
 #include "xc_bitops.h"
@@ -151,7 +150,6 @@ static inline int outbuf_write(xc_interface *xch,
                                struct outbuf* ob, void* buf, size_t len)
 {
     if ( len > ob->size - ob->pos ) {
-        errno = ERANGE;
         DBGPRINTF("outbuf_write: %zu > %zu@%zu\n", len, ob->size - ob->pos, ob->pos);
         return -1;
     }
@@ -389,12 +387,12 @@ static void *map_frame_list_list(xc_interface *xch, uint32_t dom,
     int count = 100;
     void *p;
     struct domain_info_context *dinfo = &ctx->dinfo;
-    uint64_t fll = GET_FIELD(shinfo, arch.pfn_to_mfn_frame_list_list, dinfo->guest_width);
+    uint64_t fll = GET_FIELD(shinfo, arch.pfn_to_mfn_frame_list_list);
 
     while ( count-- && (fll == 0) )
     {
         usleep(10000);
-        fll = GET_FIELD(shinfo, arch.pfn_to_mfn_frame_list_list, dinfo->guest_width);
+        fll = GET_FIELD(shinfo, arch.pfn_to_mfn_frame_list_list);
     }
 
     if ( fll == 0 )
@@ -802,12 +800,13 @@ static int save_tsc_info(xc_interface *xch, uint32_t dom, int io_fd)
 
 int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iters,
                    uint32_t max_factor, uint32_t flags,
-                   struct save_callbacks* callbacks, int hvm)
+                   struct save_callbacks* callbacks, int hvm,
+                   unsigned long vm_generationid_addr)
 {
     xc_dominfo_t info;
     DECLARE_DOMCTL;
 
-    int rc, frc, i, j, last_iter = 0, iter = 0;
+    int rc = 1, frc, i, j, last_iter = 0, iter = 0;
     int live  = (flags & XCFLAGS_LIVE);
     int debug = (flags & XCFLAGS_DEBUG);
     int superpages = !!hvm;
@@ -900,7 +899,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     {
         ERROR("No switch_qemu_logdirty callback provided.");
         errno = EINVAL;
-        goto exit;
+        return 1;
     }
 
     outbuf_init(xch, &ob_pagebuf, OUTBUF_SIZE);
@@ -915,13 +914,13 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                             &ctx->max_mfn, &ctx->hvirt_start, &ctx->pt_levels, &dinfo->guest_width) )
     {
         ERROR("Unable to get platform info.");
-        goto exit;
+        return 1;
     }
 
     if ( xc_domain_getinfo(xch, dom, 1, &info) != 1 )
     {
         PERROR("Could not get domain info");
-        goto exit;
+        return 1;
     }
 
     shared_info_frame = info.shared_info_frame;
@@ -943,7 +942,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
     if ( dinfo->p2m_size > ~XEN_DOMCTL_PFINFO_LTAB_MASK )
     {
-        errno = E2BIG;
         ERROR("Cannot save this big a guest");
         goto out;
     }
@@ -1014,7 +1012,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
     if ( !to_send || !to_fix || !to_skip )
     {
-        errno = ENOMEM;
         ERROR("Couldn't allocate to_send array");
         goto out;
     }
@@ -1033,7 +1030,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         hvm_buf = malloc(hvm_buf_size);
         if ( !hvm_buf )
         {
-            errno = ENOMEM;
             ERROR("Couldn't allocate memory");
             goto out;
         }
@@ -1602,7 +1598,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         if ( info.max_vcpu_id >= XC_SR_MAX_VCPUS )
         {
-            errno = E2BIG;
             ERROR("Too many VCPUS in guest!");
             goto out;
         }
@@ -1633,7 +1628,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         } chunk = { 0, };
 
         chunk.id = XC_SAVE_ID_HVM_GENERATION_ID_ADDR;
-        xc_hvm_param_get(xch, dom, HVM_PARAM_VM_GENERATION_ID_ADDR, &chunk.data);
+        chunk.data = vm_generationid_addr;
 
         if ( (chunk.data != 0) &&
              wrexact(io_fd, &chunk, sizeof(chunk)) )
@@ -1644,7 +1639,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         chunk.id = XC_SAVE_ID_HVM_IDENT_PT;
         chunk.data = 0;
-        xc_hvm_param_get(xch, dom, HVM_PARAM_IDENT_PT, &chunk.data);
+        xc_get_hvm_param(xch, dom, HVM_PARAM_IDENT_PT,
+                         (unsigned long *)&chunk.data);
 
         if ( (chunk.data != 0) &&
              wrexact(io_fd, &chunk, sizeof(chunk)) )
@@ -1655,7 +1651,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         chunk.id = XC_SAVE_ID_HVM_PAGING_RING_PFN;
         chunk.data = 0;
-        xc_hvm_param_get(xch, dom, HVM_PARAM_PAGING_RING_PFN, &chunk.data);
+        xc_get_hvm_param(xch, dom, HVM_PARAM_PAGING_RING_PFN,
+                         (unsigned long *)&chunk.data);
 
         if ( (chunk.data != 0) &&
              wrexact(io_fd, &chunk, sizeof(chunk)) )
@@ -1666,7 +1663,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         chunk.id = XC_SAVE_ID_HVM_ACCESS_RING_PFN;
         chunk.data = 0;
-        xc_hvm_param_get(xch, dom, HVM_PARAM_ACCESS_RING_PFN, &chunk.data);
+        xc_get_hvm_param(xch, dom, HVM_PARAM_ACCESS_RING_PFN,
+                         (unsigned long *)&chunk.data);
 
         if ( (chunk.data != 0) &&
              wrexact(io_fd, &chunk, sizeof(chunk)) )
@@ -1677,7 +1675,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         chunk.id = XC_SAVE_ID_HVM_SHARING_RING_PFN;
         chunk.data = 0;
-        xc_hvm_param_get(xch, dom, HVM_PARAM_SHARING_RING_PFN, &chunk.data);
+        xc_get_hvm_param(xch, dom, HVM_PARAM_SHARING_RING_PFN,
+                         (unsigned long *)&chunk.data);
 
         if ( (chunk.data != 0) &&
              wrexact(io_fd, &chunk, sizeof(chunk)) )
@@ -1688,7 +1687,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         chunk.id = XC_SAVE_ID_HVM_VM86_TSS;
         chunk.data = 0;
-        xc_hvm_param_get(xch, dom, HVM_PARAM_VM86_TSS, &chunk.data);
+        xc_get_hvm_param(xch, dom, HVM_PARAM_VM86_TSS,
+                         (unsigned long *)&chunk.data);
 
         if ( (chunk.data != 0) &&
              wrexact(io_fd, &chunk, sizeof(chunk)) )
@@ -1699,7 +1699,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         chunk.id = XC_SAVE_ID_HVM_CONSOLE_PFN;
         chunk.data = 0;
-        xc_hvm_param_get(xch, dom, HVM_PARAM_CONSOLE_PFN, &chunk.data);
+        xc_get_hvm_param(xch, dom, HVM_PARAM_CONSOLE_PFN,
+                         (unsigned long *)&chunk.data);
 
         if ( (chunk.data != 0) &&
              wrexact(io_fd, &chunk, sizeof(chunk)) )
@@ -1710,7 +1711,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         chunk.id = XC_SAVE_ID_HVM_ACPI_IOPORTS_LOCATION;
         chunk.data = 0;
-        xc_hvm_param_get(xch, dom, HVM_PARAM_ACPI_IOPORTS_LOCATION, &chunk.data);
+        xc_get_hvm_param(xch, dom, HVM_PARAM_ACPI_IOPORTS_LOCATION,
+                         (unsigned long *)&chunk.data);
 
         if ((chunk.data != 0) && wrexact(io_fd, &chunk, sizeof(chunk)))
         {
@@ -1720,34 +1722,13 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         chunk.id = XC_SAVE_ID_HVM_VIRIDIAN;
         chunk.data = 0;
-        xc_hvm_param_get(xch, dom, HVM_PARAM_VIRIDIAN, &chunk.data);
+        xc_get_hvm_param(xch, dom, HVM_PARAM_VIRIDIAN,
+                         (unsigned long *)&chunk.data);
 
         if ( (chunk.data != 0) &&
              wrexact(io_fd, &chunk, sizeof(chunk)) )
         {
             PERROR("Error when writing the viridian flag");
-            goto out;
-        }
-
-        chunk.id = XC_SAVE_ID_HVM_IOREQ_SERVER_PFN;
-        chunk.data = 0;
-        xc_hvm_param_get(xch, dom, HVM_PARAM_IOREQ_SERVER_PFN, &chunk.data);
-
-        if ( (chunk.data != 0) &&
-             wrexact(io_fd, &chunk, sizeof(chunk)) )
-        {
-            PERROR("Error when writing the ioreq server gmfn base");
-            goto out;
-        }
-
-        chunk.id = XC_SAVE_ID_HVM_NR_IOREQ_SERVER_PAGES;
-        chunk.data = 0;
-        xc_hvm_param_get(xch, dom, HVM_PARAM_NR_IOREQ_SERVER_PAGES, &chunk.data);
-
-        if ( (chunk.data != 0) &&
-             wrexact(io_fd, &chunk, sizeof(chunk)) )
-        {
-            PERROR("Error when writing the ioreq server gmfn count");
             goto out;
         }
     }
@@ -1816,9 +1797,12 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
 
         /* Save magic-page locations. */
         memset(magic_pfns, 0, sizeof(magic_pfns));
-        xc_hvm_param_get(xch, dom, HVM_PARAM_IOREQ_PFN, &magic_pfns[0]);
-        xc_hvm_param_get(xch, dom, HVM_PARAM_BUFIOREQ_PFN, &magic_pfns[1]);
-        xc_hvm_param_get(xch, dom, HVM_PARAM_STORE_PFN, &magic_pfns[2]);
+        xc_get_hvm_param(xch, dom, HVM_PARAM_IOREQ_PFN,
+                         (unsigned long *)&magic_pfns[0]);
+        xc_get_hvm_param(xch, dom, HVM_PARAM_BUFIOREQ_PFN,
+                         (unsigned long *)&magic_pfns[1]);
+        xc_get_hvm_param(xch, dom, HVM_PARAM_STORE_PFN,
+                         (unsigned long *)&magic_pfns[2]);
         if ( wrexact(io_fd, magic_pfns, sizeof(magic_pfns)) )
         {
             PERROR("Error when writing to state file (7)");
@@ -1846,7 +1830,8 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         }
         
         /* HVM guests are done now */
-        goto success;
+        rc = 0;
+        goto out;
     }
 
     /* PV guests only from now on */
@@ -1900,14 +1885,13 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
      * reason==SHUTDOWN_suspend and is therefore found in the edx
      * register.
      */
-    mfn = GET_FIELD(&ctxt, user_regs.edx, dinfo->guest_width);
+    mfn = GET_FIELD(&ctxt, user_regs.edx);
     if ( !MFN_IS_IN_PSEUDOPHYS_MAP(mfn) )
     {
-        errno = ERANGE;
         ERROR("Suspend record is not in range of pseudophys map");
         goto out;
     }
-    SET_FIELD(&ctxt, user_regs.edx, mfn_to_pfn(mfn), dinfo->guest_width);
+    SET_FIELD(&ctxt, user_regs.edx, mfn_to_pfn(mfn));
 
     for ( i = 0; i <= info.max_vcpu_id; i++ )
     {
@@ -1921,37 +1905,32 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         }
 
         /* Canonicalise each GDT frame number. */
-        for ( j = 0; (512*j) < GET_FIELD(&ctxt, gdt_ents, dinfo->guest_width); j++ )
+        for ( j = 0; (512*j) < GET_FIELD(&ctxt, gdt_ents); j++ )
         {
-            mfn = GET_FIELD(&ctxt, gdt_frames[j], dinfo->guest_width);
+            mfn = GET_FIELD(&ctxt, gdt_frames[j]);
             if ( !MFN_IS_IN_PSEUDOPHYS_MAP(mfn) )
             {
-                errno = ERANGE;
                 ERROR("GDT frame is not in range of pseudophys map");
                 goto out;
             }
-            SET_FIELD(&ctxt, gdt_frames[j], mfn_to_pfn(mfn), dinfo->guest_width);
+            SET_FIELD(&ctxt, gdt_frames[j], mfn_to_pfn(mfn));
         }
 
         /* Canonicalise the page table base pointer. */
-        if ( !MFN_IS_IN_PSEUDOPHYS_MAP(
-                 UNFOLD_CR3(GET_FIELD(&ctxt, ctrlreg[3], dinfo->guest_width))) )
+        if ( !MFN_IS_IN_PSEUDOPHYS_MAP(UNFOLD_CR3(
+                                           GET_FIELD(&ctxt, ctrlreg[3]))) )
         {
-            errno = ERANGE;
             ERROR("PT base is not in range of pseudophys map");
             goto out;
         }
         SET_FIELD(&ctxt, ctrlreg[3], 
-                  FOLD_CR3(mfn_to_pfn(UNFOLD_CR3(
-                                          GET_FIELD(&ctxt, ctrlreg[3], dinfo->guest_width)
-                                          ))), dinfo->guest_width);
+            FOLD_CR3(mfn_to_pfn(UNFOLD_CR3(GET_FIELD(&ctxt, ctrlreg[3])))));
 
         /* Guest pagetable (x86/64) stored in otherwise-unused CR1. */
         if ( (ctx->pt_levels == 4) && ctxt.x64.ctrlreg[1] )
         {
             if ( !MFN_IS_IN_PSEUDOPHYS_MAP(UNFOLD_CR3(ctxt.x64.ctrlreg[1])) )
             {
-                errno = ERANGE;
                 ERROR("PT base is not in range of pseudophys map");
                 goto out;
             }
@@ -1980,26 +1959,6 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         if ( wrexact(io_fd, &domctl.u.ext_vcpucontext, 128) )
         {
             PERROR("Error when writing to state file (2)");
-            goto out;
-        }
-
-        /* Check there are no PV MSRs in use. */
-        domctl.cmd = XEN_DOMCTL_get_vcpu_msrs;
-        domctl.domain = dom;
-        memset(&domctl.u, 0, sizeof(domctl.u));
-        domctl.u.vcpu_msrs.vcpu = i;
-        domctl.u.vcpu_msrs.msr_count = 0;
-        set_xen_guest_handle_raw(domctl.u.vcpu_msrs.msrs, (void*)1);
-
-        if ( xc_domctl(xch, &domctl) < 0 )
-        {
-            if ( errno == ENOBUFS )
-            {
-                errno = EOPNOTSUPP;
-                PERROR("Unable to migrate PV guest using MSRs (yet)");
-            }
-            else
-                PERROR("Error querying maximum number of MSRs for VCPU%d", i);
             goto out;
         }
 
@@ -2053,7 +2012,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
      */
     memcpy(page, live_shinfo, PAGE_SIZE);
     SET_FIELD(((shared_info_any_t *)page), 
-              arch.pfn_to_mfn_frame_list_list, 0, dinfo->guest_width);
+              arch.pfn_to_mfn_frame_list_list, 0);
     if ( wrexact(io_fd, page, PAGE_SIZE) )
     {
         PERROR("Error when writing to state file (1)");
@@ -2068,14 +2027,9 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     }
 
     /* Success! */
- success:
-    rc = errno = 0;
-    goto out_rc;
+    rc = 0;
 
  out:
-    rc = errno;
-    assert(rc);
- out_rc:
     completed = 1;
 
     if ( !rc && callbacks->postcopy )
@@ -2090,11 +2044,13 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         if (wrcompressed(io_fd) < 0)
         {
             ERROR("Error when writing compressed data, after postcopy\n");
+            rc = 1;
             goto out;
         }
         /* Append the tailbuf data to the main outbuf */
         if ( wrexact(io_fd, ob_tailbuf.buf, ob_tailbuf.pos) )
         {
+            rc = 1;
             PERROR("Error when copying tailbuf into outbuf");
             goto out;
         }
@@ -2103,8 +2059,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     /* Flush last write and discard cache for file. */
     if ( ob && outbuf_flush(xch, ob, io_fd) < 0 ) {
         PERROR("Error when flushing output buffer");
-        if (!rc)
-            rc = errno;
+        rc = 1;
     }
 
     discard_file_cache(xch, io_fd, 1 /* flush */);
@@ -2119,6 +2074,7 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
         /* reset stats timer */
         print_stats(xch, dom, 0, &time_stats, &shadow_stats, 0);
 
+        rc = 1;
         /* last_iter = 1; */
         if ( suspend_and_state(callbacks->suspend, callbacks->data, xch,
                                io_fd, dom, &info) )
@@ -2174,11 +2130,9 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
     free(hvm_buf);
     outbuf_free(&ob_pagebuf);
 
-    errno = rc;
-exit:
-    DPRINTF("Save exit of domid %u with errno=%d\n", dom, errno);
+    DPRINTF("Save exit of domid %u with rc=%d\n", dom, rc);
 
-    return !!errno;
+    return !!rc;
 }
 
 /*

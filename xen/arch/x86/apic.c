@@ -314,7 +314,7 @@ void disable_local_APIC(void)
                ~(MSR_IA32_APICBASE_ENABLE|MSR_IA32_APICBASE_EXTD));
     }
 
-    if ( kexecing && (current_local_apic_mode() != apic_boot_mode) )
+    if ( kexecing )
     {
         uint64_t msr_content;
         rdmsrl(MSR_IA32_APICBASE, msr_content);
@@ -330,9 +330,7 @@ void disable_local_APIC(void)
             wrmsrl(MSR_IA32_APICBASE, msr_content);
             break;
         case APIC_MODE_X2APIC:
-            msr_content |= MSR_IA32_APICBASE_ENABLE;
-            wrmsrl(MSR_IA32_APICBASE, msr_content);
-            msr_content |= MSR_IA32_APICBASE_EXTD;
+            msr_content |= (MSR_IA32_APICBASE_ENABLE|MSR_IA32_APICBASE_EXTD);
             wrmsrl(MSR_IA32_APICBASE, msr_content);
             break;
         default:
@@ -815,7 +813,12 @@ static void __init lapic_disable(char *str)
     setup_clear_cpu_cap(X86_FEATURE_APIC);
 }
 custom_param("nolapic", lapic_disable);
-boolean_param("lapic", enable_local_apic);
+
+static void __init lapic_enable(char *str)
+{
+    enable_local_apic = 1;
+}
+custom_param("lapic", lapic_enable);
 
 static void __init apic_set_verbosity(char *str)
 {

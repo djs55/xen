@@ -147,12 +147,6 @@ struct active_grant_entry {
 #define active_entry(t, e) \
     ((t)->active[(e)/ACGNT_PER_PAGE][(e)%ACGNT_PER_PAGE])
 
-static inline void gnttab_flush_tlb(const struct domain *d)
-{
-    if ( !paging_mode_external(d) )
-        flush_tlb_mask(d->domain_dirty_cpumask);
-}
-
 static inline unsigned int
 num_act_frames_from_sha_frames(const unsigned int num)
 {
@@ -580,7 +574,7 @@ __gnttab_map_grant_ref(
 
     if ( rgt->gt_version == 0 )
         PIN_FAIL(unlock_out, GNTST_general_error,
-                 "remote grant table not yet set up\n");
+                 "remote grant table not yet set up");
 
     /* Bounds check on the grant ref */
     if ( unlikely(op->ref >= nr_grant_entries(rgt)))
@@ -727,10 +721,12 @@ __gnttab_map_grant_ref(
 
     double_gt_lock(lgt, rgt);
 
-    if ( gnttab_need_iommu_mapping(ld) )
+    if ( is_pv_domain(ld) && need_iommu(ld) )
     {
         unsigned int wrc, rdc;
         int err = 0;
+        /* Shouldn't happen, because you can't use iommu in a HVM domain. */
+        BUG_ON(paging_mode_translate(ld));
         /* We're not translated, so we know that gmfns and mfns are
            the same things, so the IOMMU entry is always 1-to-1. */
         mapcount(lgt, rd, frame, &wrc, &rdc);
@@ -738,23 +734,13 @@ __gnttab_map_grant_ref(
              !(old_pin & (GNTPIN_hstw_mask|GNTPIN_devw_mask)) )
         {
             if ( wrc == 0 )
-            {
-                if ( is_domain_direct_mapped(ld) )
-                    err = arch_grant_map_page_identity(ld, frame, 1);
-                else
-                    err = iommu_map_page(ld, frame, frame,
-                            IOMMUF_readable|IOMMUF_writable);
-            }
+                err = iommu_map_page(ld, frame, frame,
+                                     IOMMUF_readable|IOMMUF_writable);
         }
         else if ( act_pin && !old_pin )
         {
             if ( (wrc + rdc) == 0 )
-            {
-                if ( is_domain_direct_mapped(ld) )
-                    err = arch_grant_map_page_identity(ld, frame, 0);
-                else
-                    err = iommu_map_page(ld, frame, frame, IOMMUF_readable);
-            }
+                err = iommu_map_page(ld, frame, frame, IOMMUF_readable);
         }
         if ( err )
         {
@@ -945,25 +931,16 @@ __gnttab_unmap_common(
             act->pin -= GNTPIN_hstw_inc;
     }
 
-    if ( gnttab_need_iommu_mapping(ld) )
+    if ( is_pv_domain(ld) && need_iommu(ld) )
     {
         unsigned int wrc, rdc;
         int err = 0;
+        BUG_ON(paging_mode_translate(ld));
         mapcount(lgt, rd, op->frame, &wrc, &rdc);
         if ( (wrc + rdc) == 0 )
-        {
-            if ( is_domain_direct_mapped(ld) )
-                err = arch_grant_unmap_page_identity(ld, op->frame);
-            else
-                err = iommu_unmap_page(ld, op->frame);
-        }
+            err = iommu_unmap_page(ld, op->frame);
         else if ( wrc == 0 )
-        {
-            if ( is_domain_direct_mapped(ld) )
-                err = arch_grant_map_page_identity(ld, op->frame, 0);
-            else
-                err = iommu_map_page(ld, op->frame, op->frame, IOMMUF_readable);
-        }
+            err = iommu_map_page(ld, op->frame, op->frame, IOMMUF_readable);
         if ( err )
         {
             rc = GNTST_general_error;
@@ -1122,7 +1099,7 @@ gnttab_unmap_grant_ref(
             guest_handle_add_offset(uop, 1);
         }
 
-        gnttab_flush_tlb(current->domain);
+        flush_tlb_mask(current->domain->domain_dirty_cpumask);
 
         for ( i = 0; i < partial_done; i++ )
             __gnttab_unmap_common_complete(&(common[i]));
@@ -1137,7 +1114,7 @@ gnttab_unmap_grant_ref(
     return 0;
 
 fault:
-    gnttab_flush_tlb(current->domain);
+    flush_tlb_mask(current->domain->domain_dirty_cpumask);
 
     for ( i = 0; i < partial_done; i++ )
         __gnttab_unmap_common_complete(&(common[i]));
@@ -1185,7 +1162,7 @@ gnttab_unmap_and_replace(
             guest_handle_add_offset(uop, 1);
         }
         
-        gnttab_flush_tlb(current->domain);
+        flush_tlb_mask(current->domain->domain_dirty_cpumask);
         
         for ( i = 0; i < partial_done; i++ )
             __gnttab_unmap_common_complete(&(common[i]));
@@ -1200,7 +1177,7 @@ gnttab_unmap_and_replace(
     return 0;
 
 fault:
-    gnttab_flush_tlb(current->domain);
+    flush_tlb_mask(current->domain->domain_dirty_cpumask);
 
     for ( i = 0; i < partial_done; i++ )
         __gnttab_unmap_common_complete(&(common[i]));
@@ -1592,7 +1569,7 @@ gnttab_transfer(
         }
 
         guest_physmap_remove_page(d, gop.mfn, mfn, 0);
-        gnttab_flush_tlb(d);
+        flush_tlb_mask(d->domain_dirty_cpumask);
 
         /* Find the target domain. */
         if ( unlikely((e = rcu_lock_domain_by_id(gop.domid)) == NULL) )

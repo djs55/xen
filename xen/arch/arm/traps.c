@@ -17,7 +17,6 @@
  */
 
 #include <xen/config.h>
-#include <xen/stdbool.h>
 #include <xen/init.h>
 #include <xen/string.h>
 #include <xen/version.h>
@@ -36,12 +35,11 @@
 #include <asm/regs.h>
 #include <asm/cpregs.h>
 #include <asm/psci.h>
-#include <asm/mmio.h>
 
 #include "decode.h"
+#include "io.h"
 #include "vtimer.h"
 #include <asm/gic.h>
-#include <asm/vgic.h>
 
 /* The base of the stack must always be double-word aligned, which means
  * that both the kernel half of struct cpu_user_regs (which is pushed in
@@ -76,22 +74,9 @@ void __cpuinit init_traps(void)
     /* Setup Hyp vector base */
     WRITE_SYSREG((vaddr_t)hyp_traps_vector, VBAR_EL2);
 
-    /* Trap Debug and Performance Monitor accesses */
-    WRITE_SYSREG(HDCR_TDRA|HDCR_TDOSA|HDCR_TDA|HDCR_TPM|HDCR_TPMCR,
-                 MDCR_EL2);
-
-    /* Trap CP15 c15 used for implementation defined registers */
-    WRITE_SYSREG(HSTR_T(15), HSTR_EL2);
-
-    /* Trap all coprocessor registers (0-13) except cp10 and cp11 for VFP
-     * /!\ All processors except cp10 and cp11 cannot be used in Xen
-     */
-    WRITE_SYSREG((HCPTR_CP_MASK & ~(HCPTR_CP(10) | HCPTR_CP(11))) | HCPTR_TTA,
-                 CPTR_EL2);
-
     /* Setup hypervisor traps */
-    WRITE_SYSREG(HCR_PTW|HCR_BSU_INNER|HCR_AMO|HCR_IMO|HCR_FMO|HCR_VM|
-                 HCR_TWE|HCR_TWI|HCR_TSC|HCR_TAC|HCR_SWIO|HCR_TIDCP, HCR_EL2);
+    WRITE_SYSREG(HCR_PTW|HCR_BSU_OUTER|HCR_AMO|HCR_IMO|HCR_VM|HCR_TWI|HCR_TSC|
+                 HCR_TAC, HCR_EL2);
     isb();
 }
 
@@ -287,7 +272,7 @@ static void cpsr_switch_mode(struct cpu_user_regs *regs, int mode)
         regs->cpsr |= PSR_BIG_ENDIAN;
 }
 
-static vaddr_t exception_handler32(vaddr_t offset)
+static vaddr_t exception_handler(vaddr_t offset)
 {
     uint32_t sctlr = READ_SYSREG32(SCTLR_EL1);
 
@@ -309,7 +294,7 @@ static void inject_undef32_exception(struct cpu_user_regs *regs)
     /* Saved PC points to the instruction past the faulting instruction. */
     uint32_t return_offset = is_thumb ? 2 : 4;
 
-    BUG_ON( !is_32bit_domain(current->domain) );
+    BUG_ON( !is_pv32_domain(current->domain) );
 
     /* Update processor mode */
     cpsr_switch_mode(regs, PSR_MODE_UND);
@@ -319,7 +304,7 @@ static void inject_undef32_exception(struct cpu_user_regs *regs)
     regs->lr_und = regs->pc32 + return_offset;
 
     /* Branch to exception vector */
-    regs->pc32 = exception_handler32(VECTOR32_UND);
+    regs->pc32 = exception_handler(VECTOR32_UND);
 }
 
 /* Injects an Abort exception into the current vcpu, PC is the exact
@@ -337,7 +322,7 @@ static void inject_abt32_exception(struct cpu_user_regs *regs,
     uint32_t return_offset = is_thumb ? 4 : 0;
     register_t fsr;
 
-    BUG_ON( !is_32bit_domain(current->domain) );
+    BUG_ON( !is_pv32_domain(current->domain) );
 
     cpsr_switch_mode(regs, PSR_MODE_ABT);
 
@@ -345,7 +330,7 @@ static void inject_abt32_exception(struct cpu_user_regs *regs,
     regs->spsr_abt = spsr;
     regs->lr_abt = regs->pc32 + return_offset;
 
-    regs->pc32 = exception_handler32(prefetch ? VECTOR32_PABT : VECTOR32_DABT);
+    regs->pc32 = exception_handler(prefetch ? VECTOR32_PABT : VECTOR32_DABT);
 
     /* Inject a debug fault, best we can do right now */
     if ( READ_SYSREG(TCR_EL1) & TTBCR_EAE )
@@ -398,44 +383,23 @@ static void inject_pabt32_exception(struct cpu_user_regs *regs,
 }
 
 #ifdef CONFIG_ARM_64
-/*
- * Take care to call this while regs contains the original faulting
- * state and not the (partially constructed) exception state.
- */
-static vaddr_t exception_handler64(struct cpu_user_regs *regs, vaddr_t offset)
-{
-    vaddr_t base = READ_SYSREG(VBAR_EL1);
-
-    if ( usr_mode(regs) )
-        base += VECTOR64_LOWER32_BASE;
-    else if ( psr_mode(regs->cpsr,PSR_MODE_EL0t) )
-        base += VECTOR64_LOWER64_BASE;
-    else /* Otherwise must be from kernel mode */
-        base += VECTOR64_CURRENT_SPx_BASE;
-
-    return base + offset;
-}
-
 /* Inject an undefined exception into a 64 bit guest */
 static void inject_undef64_exception(struct cpu_user_regs *regs, int instr_len)
 {
-    vaddr_t handler;
     union hsr esr = {
         .iss = 0,
         .len = instr_len,
         .ec = HSR_EC_UNKNOWN,
     };
 
-    BUG_ON( is_32bit_domain(current->domain) );
-
-    handler = exception_handler64(regs, VECTOR64_SYNC_OFFSET);
+    BUG_ON( is_pv32_domain(current->domain) );
 
     regs->spsr_el1 = regs->cpsr;
     regs->elr_el1 = regs->pc;
 
     regs->cpsr = PSR_MODE_EL1h | PSR_ABT_MASK | PSR_FIQ_MASK | \
         PSR_IRQ_MASK | PSR_DBG_MASK;
-    regs->pc = handler;
+    regs->pc = READ_SYSREG(VBAR_EL1) + VECTOR64_CURRENT_SPx_SYNC;
 
     WRITE_SYSREG32(esr.bits, ESR_EL1);
 }
@@ -446,7 +410,6 @@ static void inject_abt64_exception(struct cpu_user_regs *regs,
                                    register_t addr,
                                    int instr_len)
 {
-    vaddr_t handler;
     union hsr esr = {
         .iss = 0,
         .len = instr_len,
@@ -466,16 +429,14 @@ static void inject_abt64_exception(struct cpu_user_regs *regs,
         esr.ec = prefetch
             ? HSR_EC_INSTR_ABORT_CURR_EL : HSR_EC_DATA_ABORT_CURR_EL;
 
-    BUG_ON( is_32bit_domain(current->domain) );
-
-    handler = exception_handler64(regs, VECTOR64_SYNC_OFFSET);
+    BUG_ON( is_pv32_domain(current->domain) );
 
     regs->spsr_el1 = regs->cpsr;
     regs->elr_el1 = regs->pc;
 
     regs->cpsr = PSR_MODE_EL1h | PSR_ABT_MASK | PSR_FIQ_MASK | \
         PSR_IRQ_MASK | PSR_DBG_MASK;
-    regs->pc = handler;
+    regs->pc = READ_SYSREG(VBAR_EL1) + VECTOR64_CURRENT_SPx_SYNC;
 
     WRITE_SYSREG(addr, FAR_EL1);
     WRITE_SYSREG32(esr.bits, ESR_EL1);
@@ -497,22 +458,11 @@ static void inject_iabt64_exception(struct cpu_user_regs *regs,
 
 #endif
 
-static void inject_undef_exception(struct cpu_user_regs *regs,
-                                   int instr_len)
-{
-        if ( is_32bit_domain(current->domain) )
-            inject_undef32_exception(regs);
-#ifdef CONFIG_ARM_64
-        else
-            inject_undef64_exception(regs, instr_len);
-#endif
-}
-
 static void inject_iabt_exception(struct cpu_user_regs *regs,
                                   register_t addr,
                                   int instr_len)
 {
-        if ( is_32bit_domain(current->domain) )
+        if ( is_pv32_domain(current->domain) )
             inject_pabt32_exception(regs, addr);
 #ifdef CONFIG_ARM_64
         else
@@ -524,7 +474,7 @@ static void inject_dabt_exception(struct cpu_user_regs *regs,
                                   register_t addr,
                                   int instr_len)
 {
-        if ( is_32bit_domain(current->domain) )
+        if ( is_pv32_domain(current->domain) )
             inject_dabt32_exception(regs, addr);
 #ifdef CONFIG_ARM_64
         else
@@ -729,21 +679,11 @@ static void _show_registers(struct cpu_user_regs *regs,
 
     if ( guest_mode )
     {
-        if ( is_32bit_domain(v->domain) )
+        if ( is_pv32_domain(v->domain) )
             show_registers_32(regs, ctxt, guest_mode, v);
 #ifdef CONFIG_ARM_64
-        else if ( is_64bit_domain(v->domain) )
-        {
-            if ( psr_mode_is_32bit(regs->cpsr) )
-            {
-                BUG_ON(!usr_mode(regs));
-                show_registers_32(regs, ctxt, guest_mode, v);
-            }
-            else
-            {
-                show_registers_64(regs, ctxt, guest_mode, v);
-            }
-        }
+        else if ( is_pv64_domain(v->domain) )
+            show_registers_64(regs, ctxt, guest_mode, v);
 #endif
     }
     else
@@ -823,7 +763,7 @@ static void show_guest_stack(struct vcpu *v, struct cpu_user_regs *regs)
 {
     int i;
     vaddr_t sp;
-    struct page_info *page;
+    paddr_t stack_phys;
     void *mapped;
     unsigned long *stack, addr;
 
@@ -883,20 +823,13 @@ static void show_guest_stack(struct vcpu *v, struct cpu_user_regs *regs)
 
     printk("Guest stack trace from sp=%"PRIvaddr":\n  ", sp);
 
-    if ( sp & ( sizeof(long) - 1 ) )
-    {
-        printk("Stack is misaligned\n");
-        return;
-    }
-
-    page = get_page_from_gva(current->domain, sp, GV2M_READ);
-    if ( page == NULL )
+    if ( gvirt_to_maddr(sp, &stack_phys) )
     {
         printk("Failed to convert stack to physical address\n");
         return;
     }
 
-    mapped = __map_domain_page(page);
+    mapped = map_domain_page(stack_phys >> PAGE_SHIFT);
 
     stack = mapped + (sp & ~PAGE_MASK);
 
@@ -914,7 +847,7 @@ static void show_guest_stack(struct vcpu *v, struct cpu_user_regs *regs)
         printk("Stack empty.");
     printk("\n");
     unmap_domain_page(mapped);
-    put_page(page);
+
 }
 
 #define STACK_BEFORE_EXCEPTION(regs) ((register_t*)(regs)->sp)
@@ -1045,7 +978,7 @@ void do_unexpected_trap(const char *msg, struct cpu_user_regs *regs)
 {
     printk("CPU%d: Unexpected Trap: %s\n", smp_processor_id(), msg);
     show_execution_state(regs);
-    panic("CPU%d: Unexpected Trap: %s\n", smp_processor_id(), msg);
+    while(1);
 }
 
 typedef register_t (*arm_hypercall_fn_t)(
@@ -1073,14 +1006,30 @@ static arm_hypercall_t arm_hypercall_table[] = {
     HYPERCALL(sched_op, 2),
     HYPERCALL(console_io, 3),
     HYPERCALL(xen_version, 2),
-    HYPERCALL(xsm_op, 1),
     HYPERCALL(event_channel_op, 2),
     HYPERCALL(physdev_op, 2),
     HYPERCALL(sysctl, 2),
     HYPERCALL(hvm_op, 2),
     HYPERCALL(grant_table_op, 3),
-    HYPERCALL(multicall, 2),
     HYPERCALL_ARM(vcpu_op, 3),
+};
+
+typedef int (*arm_psci_fn_t)(uint32_t, register_t);
+
+typedef struct {
+    arm_psci_fn_t fn;
+    int nr_args;
+} arm_psci_t;
+
+#define PSCI(_name, _nr_args)                                  \
+    [ PSCI_ ## _name ] =  {                                    \
+        .fn = (arm_psci_fn_t) &do_psci_ ## _name,              \
+        .nr_args = _nr_args,                                   \
+    }
+
+static arm_psci_t arm_psci_table[] = {
+    PSCI(cpu_off, 1),
+    PSCI(cpu_on, 2),
 };
 
 #ifndef NDEBUG
@@ -1115,108 +1064,33 @@ static void do_debug_trap(struct cpu_user_regs *regs, unsigned int code)
 #endif
 
 #ifdef CONFIG_ARM_64
-#define PSCI_RESULT_REG(reg) (reg)->x0
-#define PSCI_ARG(reg,n) (reg)->x##n
-#define PSCI_ARG32(reg,n) (uint32_t)( (reg)->x##n & 0x00000000FFFFFFFF )
+#define PSCI_OP_REG(r) (r)->x0
+#define PSCI_RESULT_REG(r) (r)->x0
+#define PSCI_ARGS(r) (r)->x1, (r)->x2
 #else
-#define PSCI_RESULT_REG(reg) (reg)->r0
-#define PSCI_ARG(reg,n) (reg)->r##n
-#define PSCI_ARG32(reg,n) PSCI_ARG(reg,n)
+#define PSCI_OP_REG(r) (r)->r0
+#define PSCI_RESULT_REG(r) (r)->r0
+#define PSCI_ARGS(r) (r)->r1, (r)->r2
 #endif
-
-/* helper function for checking arm mode 32/64 bit */
-static inline int psci_mode_check(struct domain *d, register_t fid)
-{
-        return !( is_64bit_domain(d)^( (fid & PSCI_0_2_64BIT) >> 30 ) );
-}
 
 static void do_trap_psci(struct cpu_user_regs *regs)
 {
-    register_t fid = PSCI_ARG(regs,0);
+    arm_psci_fn_t psci_call = NULL;
 
-    /* preloading in case psci_mode_check fails */
-    PSCI_RESULT_REG(regs) = PSCI_INVALID_PARAMETERS;
-    switch( fid )
+    if ( PSCI_OP_REG(regs) >= ARRAY_SIZE(arm_psci_table) )
     {
-    case PSCI_cpu_off:
-        {
-            uint32_t pstate = PSCI_ARG32(regs,1);
-            PSCI_RESULT_REG(regs) = do_psci_cpu_off(pstate);
-        }
-        break;
-    case PSCI_cpu_on:
-        {
-            uint32_t vcpuid = PSCI_ARG32(regs,1);
-            register_t epoint = PSCI_ARG(regs,2);
-            PSCI_RESULT_REG(regs) = do_psci_cpu_on(vcpuid, epoint);
-        }
-        break;
-    case PSCI_0_2_FN_PSCI_VERSION:
-        PSCI_RESULT_REG(regs) = do_psci_0_2_version();
-        break;
-    case PSCI_0_2_FN_CPU_OFF:
-        PSCI_RESULT_REG(regs) = do_psci_0_2_cpu_off();
-        break;
-    case PSCI_0_2_FN_MIGRATE_INFO_TYPE:
-        PSCI_RESULT_REG(regs) = do_psci_0_2_migrate_info_type();
-        break;
-    case PSCI_0_2_FN_MIGRATE_INFO_UP_CPU:
-    case PSCI_0_2_FN64_MIGRATE_INFO_UP_CPU:
-        if ( psci_mode_check(current->domain, fid) )
-            PSCI_RESULT_REG(regs) = do_psci_0_2_migrate_info_up_cpu();
-        break;
-    case PSCI_0_2_FN_SYSTEM_OFF:
-        do_psci_0_2_system_off();
-        PSCI_RESULT_REG(regs) = PSCI_INTERNAL_FAILURE;
-        break;
-    case PSCI_0_2_FN_SYSTEM_RESET:
-        do_psci_0_2_system_reset();
-        PSCI_RESULT_REG(regs) = PSCI_INTERNAL_FAILURE;
-        break;
-    case PSCI_0_2_FN_CPU_ON:
-    case PSCI_0_2_FN64_CPU_ON:
-        if ( psci_mode_check(current->domain, fid) )
-        {
-            register_t vcpuid = PSCI_ARG(regs,1);
-            register_t epoint = PSCI_ARG(regs,2);
-            register_t cid = PSCI_ARG(regs,3);
-            PSCI_RESULT_REG(regs) =
-                do_psci_0_2_cpu_on(vcpuid, epoint, cid);
-        }
-        break;
-    case PSCI_0_2_FN_CPU_SUSPEND:
-    case PSCI_0_2_FN64_CPU_SUSPEND:
-        if ( psci_mode_check(current->domain, fid) )
-        {
-            uint32_t pstate = PSCI_ARG32(regs,1);
-            register_t epoint = PSCI_ARG(regs,2);
-            register_t cid = PSCI_ARG(regs,3);
-            PSCI_RESULT_REG(regs) =
-                do_psci_0_2_cpu_suspend(pstate, epoint, cid);
-        }
-        break;
-    case PSCI_0_2_FN_AFFINITY_INFO:
-    case PSCI_0_2_FN64_AFFINITY_INFO:
-        if ( psci_mode_check(current->domain, fid) )
-        {
-            register_t taff = PSCI_ARG(regs,1);
-            uint32_t laff = PSCI_ARG32(regs,2);
-            PSCI_RESULT_REG(regs) =
-                do_psci_0_2_affinity_info(taff, laff);
-        }
-        break;
-    case PSCI_0_2_FN_MIGRATE:
-    case PSCI_0_2_FN64_MIGRATE:
-        if ( psci_mode_check(current->domain, fid) )
-        {
-            uint32_t tcpu = PSCI_ARG32(regs,1);
-            PSCI_RESULT_REG(regs) = do_psci_0_2_migrate(tcpu);
-        }
-        break;
-    default:
         domain_crash_synchronous();
         return;
     }
+
+    psci_call = arm_psci_table[PSCI_OP_REG(regs)].fn;
+    if ( psci_call == NULL )
+    {
+        domain_crash_synchronous();
+        return;
+    }
+
+    PSCI_RESULT_REG(regs) = psci_call(PSCI_ARGS(regs));
 }
 
 #ifdef CONFIG_ARM_64
@@ -1284,24 +1158,6 @@ static void do_trap_hypercall(struct cpu_user_regs *regs, register_t *nr,
 #endif
 }
 
-static bool_t check_multicall_32bit_clean(struct multicall_entry *multi)
-{
-    int i;
-
-    for ( i = 0; i < arm_hypercall_table[multi->op].nr_args; i++ )
-    {
-        if ( unlikely(multi->args[i] & 0xffffffff00000000ULL) )
-        {
-            printk("%pv: multicall argument %d is not 32-bit clean %"PRIx64"\n",
-                   current, i, multi->args[i]);
-            domain_crash(current->domain);
-            return false;
-        }
-    }
-
-    return true;
-}
-
 void do_multicall_call(struct multicall_entry *multi)
 {
     arm_hypercall_fn_t call = NULL;
@@ -1319,13 +1175,9 @@ void do_multicall_call(struct multicall_entry *multi)
         return;
     }
 
-    if ( is_32bit_domain(current->domain) &&
-         !check_multicall_32bit_clean(multi) )
-        return;
-
     multi->result = call(multi->args[0], multi->args[1],
-                         multi->args[2], multi->args[3],
-                         multi->args[4]);
+                        multi->args[2], multi->args[3],
+                        multi->args[4]);
 }
 
 /*
@@ -1378,7 +1230,7 @@ static int check_conditional_instr(struct cpu_user_regs *regs, union hsr hsr)
     {
         unsigned long it;
 
-        BUG_ON( !is_32bit_domain(current->domain) || !(cpsr&PSR_THUMB) );
+        BUG_ON( !is_pv32_domain(current->domain) || !(cpsr&PSR_THUMB) );
 
         it = ( (cpsr >> (10-2)) & 0xfc) | ((cpsr >> 25) & 0x3 );
 
@@ -1403,10 +1255,10 @@ static void advance_pc(struct cpu_user_regs *regs, union hsr hsr)
     unsigned long itbits, cond, cpsr = regs->cpsr;
 
     /* PSR_IT_MASK bits can only be set for 32-bit processors in Thumb mode. */
-    BUG_ON( (!is_32bit_domain(current->domain)||!(cpsr&PSR_THUMB))
+    BUG_ON( (!is_pv32_domain(current->domain)||!(cpsr&PSR_THUMB))
             && (cpsr&PSR_IT_MASK) );
 
-    if ( is_32bit_domain(current->domain) && (cpsr&PSR_IT_MASK) )
+    if ( is_pv32_domain(current->domain) && (cpsr&PSR_IT_MASK) )
     {
         /* The ITSTATE[7:0] block is contained in CPSR[15:10],CPSR[26:25]
          *
@@ -1497,45 +1349,11 @@ static void do_cp15_32(struct cpu_user_regs *regs,
         if ( cp32.read )
            *r = v->arch.actlr;
         break;
-
-    /* We could trap ID_DFR0 and tell the guest we don't support
-     * performance monitoring, but Linux doesn't check the ID_DFR0.
-     * Therefore it will read PMCR.
-     *
-     * We tell the guest we have 0 counters. Unfortunately we must
-     * always support PMCCNTR (the cyle counter): we just RAZ/WI for all
-     * PM register, which doesn't crash the kernel at least
-     */
-    case HSR_CPREG32(PMCR):
-    case HSR_CPREG32(PMCNTENSET):
-    case HSR_CPREG32(PMCNTENCLR):
-    case HSR_CPREG32(PMOVSR):
-    case HSR_CPREG32(PMSWINC):
-    case HSR_CPREG32(PMSELR):
-    case HSR_CPREG32(PMCEID0):
-    case HSR_CPREG32(PMCEID1):
-    case HSR_CPREG32(PMCCNTR):
-    case HSR_CPREG32(PMXEVCNTR):
-    case HSR_CPREG32(PMXEVCNR):
-    case HSR_CPREG32(PMUSERENR):
-    case HSR_CPREG32(PMINTENSET):
-    case HSR_CPREG32(PMINTENCLR):
-    case HSR_CPREG32(PMOVSSET):
-        if ( cp32.read )
-            *r = 0;
-        break;
-
     default:
-#ifndef NDEBUG
-        gdprintk(XENLOG_ERR,
-                 "%s p15, %d, r%d, cr%d, cr%d, %d @ 0x%"PRIregister"\n",
-                 cp32.read ? "mrc" : "mcr",
-                 cp32.op1, cp32.reg, cp32.crn, cp32.crm, cp32.op2, regs->pc);
-        gdprintk(XENLOG_ERR, "unhandled 32-bit CP15 access %#x\n",
-                 hsr.bits & HSR_CP32_REGS_MASK);
-#endif
-        inject_undef_exception(regs, hsr.len);
-        return;
+        printk("%s p15, %d, r%d, cr%d, cr%d, %d @ 0x%"PRIregister"\n",
+               cp32.read ? "mrc" : "mcr",
+               cp32.op1, cp32.reg, cp32.crn, cp32.crm, cp32.op2, regs->pc);
+        panic("unhandled 32-bit CP15 access %#x", hsr.bits & HSR_CP32_REGS_MASK);
     }
     advance_pc(regs, hsr);
 }
@@ -1543,6 +1361,8 @@ static void do_cp15_32(struct cpu_user_regs *regs,
 static void do_cp15_64(struct cpu_user_regs *regs,
                        union hsr hsr)
 {
+    struct hsr_cp64 cp64 = hsr.cp64;
+
     if ( !check_conditional_instr(regs, hsr) )
     {
         advance_pc(regs, hsr);
@@ -1560,181 +1380,22 @@ static void do_cp15_64(struct cpu_user_regs *regs,
         }
         break;
     default:
-        {
-#ifndef NDEBUG
-            struct hsr_cp64 cp64 = hsr.cp64;
-
-            gdprintk(XENLOG_ERR,
-                     "%s p15, %d, r%d, r%d, cr%d @ 0x%"PRIregister"\n",
-                     cp64.read ? "mrrc" : "mcrr",
-                     cp64.op1, cp64.reg1, cp64.reg2, cp64.crm, regs->pc);
-            gdprintk(XENLOG_ERR, "unhandled 64-bit CP15 access %#x\n",
-                     hsr.bits & HSR_CP64_REGS_MASK);
-#endif
-            inject_undef_exception(regs, hsr.len);
-            return;
-        }
+        printk("%s p15, %d, r%d, r%d, cr%d @ 0x%"PRIregister"\n",
+               cp64.read ? "mrrc" : "mcrr",
+               cp64.op1, cp64.reg1, cp64.reg2, cp64.crm, regs->pc);
+        panic("unhandled 64-bit CP15 access %#x", hsr.bits & HSR_CP64_REGS_MASK);
     }
     advance_pc(regs, hsr);
-}
-
-static void do_cp14_32(struct cpu_user_regs *regs, union hsr hsr)
-{
-    struct hsr_cp32 cp32 = hsr.cp32;
-    uint32_t *r = (uint32_t *)select_user_reg(regs, cp32.reg);
-    struct domain *d = current->domain;
-
-    if ( !check_conditional_instr(regs, hsr) )
-    {
-        advance_pc(regs, hsr);
-        return;
-    }
-
-    switch ( hsr.bits & HSR_CP32_REGS_MASK )
-    {
-    case HSR_CPREG32(DBGDIDR):
-
-        /* Read-only register */
-        if ( !cp32.read )
-            goto bad_cp;
-
-        /* Implement the minimum requirements:
-         *  - Number of watchpoints: 1
-         *  - Number of breakpoints: 2
-         *  - Version: ARMv7 v7.1
-         *  - Variant and Revision bits match MDIR
-         */
-        *r = (1 << 24) | (5 << 16);
-        *r |= ((d->arch.vpidr >> 20) & 0xf) | (d->arch.vpidr & 0xf);
-        break;
-
-    case HSR_CPREG32(DBGDSCRINT):
-    case HSR_CPREG32(DBGDSCREXT):
-        /* Implement debug status and control register as RAZ/WI.
-         * The OS won't use Hardware debug if MDBGen not set
-         */
-        if ( cp32.read )
-           *r = 0;
-        break;
-    case HSR_CPREG32(DBGVCR):
-    case HSR_CPREG32(DBGOSLAR):
-    case HSR_CPREG32(DBGBVR0):
-    case HSR_CPREG32(DBGBCR0):
-    case HSR_CPREG32(DBGWVR0):
-    case HSR_CPREG32(DBGWCR0):
-    case HSR_CPREG32(DBGBVR1):
-    case HSR_CPREG32(DBGBCR1):
-    case HSR_CPREG32(DBGOSDLR):
-        /* RAZ/WI */
-        if ( cp32.read )
-            *r = 0;
-        break;
-
-    default:
-bad_cp:
-#ifndef NDEBUG
-        gdprintk(XENLOG_ERR,
-                 "%s p14, %d, r%d, cr%d, cr%d, %d @ 0x%"PRIregister"\n",
-                  cp32.read ? "mrc" : "mcr",
-                  cp32.op1, cp32.reg, cp32.crn, cp32.crm, cp32.op2, regs->pc);
-        gdprintk(XENLOG_ERR, "unhandled 32-bit cp14 access %#x\n",
-                 hsr.bits & HSR_CP32_REGS_MASK);
-#endif
-        inject_undef_exception(regs, hsr.len);
-        return;
-    }
-
-    advance_pc(regs, hsr);
-}
-
-static void do_cp14_dbg(struct cpu_user_regs *regs, union hsr hsr)
-{
-#ifndef NDEBUG
-    struct hsr_cp64 cp64 = hsr.cp64;
-#endif
-
-    if ( !check_conditional_instr(regs, hsr) )
-    {
-        advance_pc(regs, hsr);
-        return;
-    }
-
-#ifndef NDEBUG
-    gdprintk(XENLOG_ERR,
-             "%s p14, %d, r%d, r%d, cr%d @ 0x%"PRIregister"\n",
-             cp64.read ? "mrrc" : "mcrr",
-             cp64.op1, cp64.reg1, cp64.reg2, cp64.crm, regs->pc);
-    gdprintk(XENLOG_ERR, "unhandled 64-bit CP14 access %#x\n",
-             hsr.bits & HSR_CP64_REGS_MASK);
-#endif
-    inject_undef_exception(regs, hsr.len);
-}
-
-static void do_cp(struct cpu_user_regs *regs, union hsr hsr)
-{
-#ifndef NDEBUG
-    struct hsr_cp cp = hsr.cp;
-#endif
-
-    if ( !check_conditional_instr(regs, hsr) )
-    {
-        advance_pc(regs, hsr);
-        return;
-    }
-
-#ifndef NDEBUG
-    ASSERT(!cp.tas); /* We don't trap SIMD instruction */
-    gdprintk(XENLOG_ERR, "unhandled CP%d access\n", cp.coproc);
-#endif
-    inject_undef_exception(regs, hsr.len);
 }
 
 #ifdef CONFIG_ARM_64
 static void do_sysreg(struct cpu_user_regs *regs,
                       union hsr hsr)
 {
-    register_t *x = select_user_reg(regs, hsr.sysreg.reg);
+    struct hsr_sysreg sysreg = hsr.sysreg;
 
     switch ( hsr.bits & HSR_SYSREG_REGS_MASK )
     {
-    /* RAZ/WI registers: */
-    /*  - Debug */
-    case HSR_SYSREG_MDSCR_EL1:
-    /*  - Perf monitors */
-    case HSR_SYSREG_PMINTENSET_EL1:
-    case HSR_SYSREG_PMINTENCLR_EL1:
-    case HSR_SYSREG_PMCR_EL0:
-    case HSR_SYSREG_PMCNTENSET_EL0:
-    case HSR_SYSREG_PMCNTENCLR_EL0:
-    case HSR_SYSREG_PMOVSCLR_EL0:
-    case HSR_SYSREG_PMSWINC_EL0:
-    case HSR_SYSREG_PMSELR_EL0:
-    case HSR_SYSREG_PMCEID0_EL0:
-    case HSR_SYSREG_PMCEID1_EL0:
-    case HSR_SYSREG_PMCCNTR_EL0:
-    case HSR_SYSREG_PMXEVTYPER_EL0:
-    case HSR_SYSREG_PMXEVCNTR_EL0:
-    case HSR_SYSREG_PMUSERENR_EL0:
-    case HSR_SYSREG_PMOVSSET_EL0:
-    /* - Breakpoints */
-    HSR_SYSREG_DBG_CASES(DBGBVR):
-    HSR_SYSREG_DBG_CASES(DBGBCR):
-    /* - Watchpoints */
-    HSR_SYSREG_DBG_CASES(DBGWVR):
-    HSR_SYSREG_DBG_CASES(DBGWCR):
-    /* - Double Lock Register */
-    case HSR_SYSREG_OSDLR_EL1:
-        if ( hsr.sysreg.read )
-            *x = 0;
-        /* else: write ignored */
-        break;
-
-    /* Write only, Write ignore registers: */
-    case HSR_SYSREG_OSLAR_EL1:
-        if ( hsr.sysreg.read )
-            goto bad_sysreg;
-        /* else: write ignored */
-        break;
     case HSR_SYSREG_CNTP_CTL_EL0:
     case HSR_SYSREG_CNTP_TVAL_EL0:
         if ( !vtimer_emulate(regs, hsr) )
@@ -1744,40 +1405,16 @@ static void do_sysreg(struct cpu_user_regs *regs,
             domain_crash_synchronous();
         }
         break;
-    case HSR_SYSREG_ICC_SGI1R_EL1:
-        if ( !vgic_emulate(regs, hsr) )
-        {
-            dprintk(XENLOG_WARNING,
-                    "failed emulation of sysreg ICC_SGI1R_EL1 access\n");
-            inject_undef64_exception(regs, hsr.len);
-        }
-        break;
-    case HSR_SYSREG_ICC_SGI0R_EL1:
-    case HSR_SYSREG_ICC_ASGI1R_EL1:
-        /* TBD: Implement to support secure grp0/1 SGI forwarding */
-        dprintk(XENLOG_WARNING,
-                "Emulation of sysreg ICC_SGI0R_EL1/ASGI1R_EL1 not supported\n");
-        inject_undef64_exception(regs, hsr.len);
     default:
- bad_sysreg:
-        {
-            struct hsr_sysreg sysreg = hsr.sysreg;
-#ifndef NDEBUG
-
-            gdprintk(XENLOG_ERR,
-                     "%s %d, %d, c%d, c%d, %d %s x%d @ 0x%"PRIregister"\n",
-                     sysreg.read ? "mrs" : "msr",
-                     sysreg.op0, sysreg.op1,
-                     sysreg.crn, sysreg.crm,
-                     sysreg.op2,
-                     sysreg.read ? "=>" : "<=",
-                     sysreg.reg, regs->pc);
-            gdprintk(XENLOG_ERR, "unhandled 64-bit sysreg access %#x\n",
-                     hsr.bits & HSR_SYSREG_REGS_MASK);
-#endif
-            inject_undef_exception(regs, sysreg.len);
-            return;
-        }
+        printk("%s %d, %d, c%d, c%d, %d %s x%d @ 0x%"PRIregister"\n",
+               sysreg.read ? "mrs" : "msr",
+               sysreg.op0, sysreg.op1,
+               sysreg.crn, sysreg.crm,
+               sysreg.op2,
+               sysreg.read ? "=>" : "<=",
+               sysreg.reg, regs->pc);
+        panic("unhandled 64-bit sysreg access %#x",
+              hsr.bits & HSR_SYSREG_REGS_MASK);
     }
 
     regs->pc += 4;
@@ -1902,28 +1539,9 @@ bad_data_abort:
     inject_dabt_exception(regs, info.gva, hsr.len);
 }
 
-static void enter_hypervisor_head(struct cpu_user_regs *regs)
-{
-    if ( guest_mode(regs) )
-        gic_clear_lrs(current);
-}
-
 asmlinkage void do_trap_hypervisor(struct cpu_user_regs *regs)
 {
     union hsr hsr = { .bits = READ_SYSREG32(ESR_EL2) };
-
-    enter_hypervisor_head(regs);
-
-    /*
-     * We currently do not handle 32-bit userspace on 64-bit kernels
-     * correctly (See XSA-102). Until that is resolved we treat any
-     * trap from 32-bit userspace on 64-bit kernel as undefined.
-     */
-    if ( is_64bit_domain(current->domain) && psr_mode_is_32bit(regs->cpsr) )
-    {
-        inject_undef_exception(regs, hsr.len);
-        return;
-    }
 
     switch (hsr.ec) {
     case HSR_EC_WFI_WFE:
@@ -1932,39 +1550,27 @@ asmlinkage void do_trap_hypervisor(struct cpu_user_regs *regs)
             advance_pc(regs, hsr);
             return;
         }
-        if ( hsr.wfi_wfe.ti ) {
-            /* Yield the VCPU for WFE */
-            vcpu_yield();
-        } else {
-            /* Block the VCPU for WFI */
-            vcpu_block_unless_event_pending(current);
-        }
+        /* at the moment we only trap WFI */
+        vcpu_block();
+        /* The ARM spec declares that even if local irqs are masked in
+         * the CPSR register, an irq should wake up a cpu from WFI anyway.
+         * For this reason we need to check for irqs that need delivery,
+         * ignoring the CPSR register, *after* calling SCHEDOP_block to
+         * avoid races with vgic_vcpu_inject_irq.
+         */
+        if ( local_events_need_delivery_nomask() )
+            vcpu_unblock(current);
         advance_pc(regs, hsr);
         break;
     case HSR_EC_CP15_32:
-        if ( !is_32bit_domain(current->domain) )
+        if ( ! is_pv32_domain(current->domain) )
             goto bad_trap;
         do_cp15_32(regs, hsr);
         break;
     case HSR_EC_CP15_64:
-        if ( !is_32bit_domain(current->domain) )
+        if ( ! is_pv32_domain(current->domain) )
             goto bad_trap;
         do_cp15_64(regs, hsr);
-        break;
-    case HSR_EC_CP14_32:
-        if ( !is_32bit_domain(current->domain) )
-            goto bad_trap;
-        do_cp14_32(regs, hsr);
-        break;
-    case HSR_EC_CP14_DBG:
-        if ( !is_32bit_domain(current->domain) )
-            goto bad_trap;
-        do_cp14_dbg(regs, hsr);
-        break;
-    case HSR_EC_CP:
-        if ( !is_32bit_domain(current->domain) )
-            goto bad_trap;
-        do_cp(regs, hsr);
         break;
     case HSR_EC_SMC32:
         inject_undef32_exception(regs);
@@ -1992,7 +1598,7 @@ asmlinkage void do_trap_hypervisor(struct cpu_user_regs *regs)
         inject_undef64_exception(regs, hsr.len);
         break;
     case HSR_EC_SYSREG:
-        if ( is_32bit_domain(current->domain) )
+        if ( is_pv32_domain(current->domain) )
             goto bad_trap;
         do_sysreg(regs, hsr);
         break;
@@ -2006,7 +1612,7 @@ asmlinkage void do_trap_hypervisor(struct cpu_user_regs *regs)
         break;
     default:
  bad_trap:
-        printk("Hypervisor Trap. HSR=0x%x EC=0x%x IL=%x Syndrome=0x%"PRIx32"\n",
+        printk("Hypervisor Trap. HSR=0x%x EC=0x%x IL=%x Syndrome=%"PRIx32"\n",
                hsr.bits, hsr.ec, hsr.len, hsr.iss);
         do_unexpected_trap("Hypervisor", regs);
     }
@@ -2014,13 +1620,11 @@ asmlinkage void do_trap_hypervisor(struct cpu_user_regs *regs)
 
 asmlinkage void do_trap_irq(struct cpu_user_regs *regs)
 {
-    enter_hypervisor_head(regs);
     gic_interrupt(regs, 0);
 }
 
 asmlinkage void do_trap_fiq(struct cpu_user_regs *regs)
 {
-    enter_hypervisor_head(regs);
     gic_interrupt(regs, 1);
 }
 

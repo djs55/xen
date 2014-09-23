@@ -106,14 +106,12 @@ F:	xen/include/acpi/
 
 AMD IOMMU
 M:	Suravee Suthikulpanit <suravee.suthikulpanit@amd.com>
-M:	Aravind Gopalakrishnan <Aravind.Gopalakrishnan@amd.com>
 S:	Maintained
 F:	xen/drivers/passthrough/amd/
 
 AMD SVM
 M:	Boris Ostrovsky <boris.ostrovsky@oracle.com>
 M:	Suravee Suthikulpanit <suravee.suthikulpanit@amd.com>
-M:	Aravind Gopalakrishnan <Aravind.Gopalakrishnan@amd.com>
 S:	Supported
 F:	xen/arch/x86/hvm/svm/
 
@@ -132,14 +130,9 @@ S:	Supported
 L:	xen-devel@lists.xen.org
 F:	xen/arch/arm/
 F:	xen/include/asm-arm/
-F:	xen/drivers/char/dt-uart.c
-F:	xen/drivers/char/exynos4210-uart.c
-F:	xen/drivers/char/omap-uart.c
-F:	xen/drivers/char/pl011.c
-F:	xen/drivers/passthrough/arm/
 
 CPU POOLS
-M:	Juergen Gross <jgross@suse.com>
+M:	Juergen Gross <juergen.gross@ts.fujitsu.com>
 S:	Supported
 F:	xen/common/cpupool.c
 
@@ -187,26 +180,24 @@ F:	xen/arch/x86/tboot.c
 F:	xen/include/asm-x86/tboot.h
 
 INTEL(R) VT FOR DIRECTED I/O (VT-D)
-M:	Yang Zhang <yang.z.zhang@intel.com>
-M:	Kevin Tian <kevin.tian@intel.com>
+M:	Xiantao Zhang <xiantao.zhang@intel.com>
 S:	Supported
 F:	xen/drivers/passthrough/vtd/
 
 INTEL(R) VT FOR X86 (VT-X)
 M:	Jun Nakajima <jun.nakajima@intel.com>
 M:	Eddie Dong <eddie.dong@intel.com>
-M:	Kevin Tian <kevin.tian@intel.com>
 S:	Supported
 F:	xen/arch/x86/hvm/vmx/
 F:	xen/arch/x86/mm/hap/p2m-ept.c
 F:	xen/include/asm-x86/hvm/vmx/
 
 IOMMU VENDOR INDEPENDENT CODE
+M:	Xiantao Zhang <xiantao.zhang@intel.com>
 M:	Jan Beulich <jbeulich@suse.com>
 S:	Supported
 F:	xen/drivers/passthrough/
 X:	xen/drivers/passthrough/amd/
-X:	xen/drivers/passthrough/arm/
 X:	xen/drivers/passthrough/vtd/
 F:	xen/include/xen/iommu.h
 
@@ -220,7 +211,7 @@ F:      xen/arch/x86/x86_64/kexec_reloc.S
 
 MACHINE CHECK (MCA) & RAS
 M:	Christoph Egger <chegger@amazon.de>
-M:	Liu Jinsong <jinsong.liu@alibaba-inc.com>
+M:	Liu Jinsong <jinsong.liu@intel.com>
 S:	Supported
 F:	xen/arch/x86/cpu/mcheck/
 
@@ -237,7 +228,7 @@ F:	tools/ocaml/
 
 POWER MANAGEMENT
 M:	Jan Beulich <jbeulich@suse.com>
-M:	Liu Jinsong <jinsong.liu@alibaba-inc.com>
+M:	Liu Jinsong <jinsong.liu@intel.com>
 S:	Supported
 F:	xen/arch/x86/acpi/
 X:	xen/arch/x86/acpi/boot.c
@@ -257,9 +248,10 @@ T:	git git://xenbits.xen.org/qemu-upstream-*.git
 
 REMUS
 M:	Shriram Rajagopalan <rshriram@cs.ubc.ca>
-M:	Yang Hongyang <yanghy@cn.fujitsu.com>
 S:	Maintained
-F:	docs/README.remus
+F:	tools/remus/
+F:	tools/python/xen/remus/
+F:	tools/python/xen/lowlevel/checkpoint/
 F:	tools/blktap2/drivers/block-remus.c
 F:	tools/blktap2/drivers/hashtable*
 
@@ -352,11 +344,7 @@ F:  xen/xsm/
 F:  docs/misc/xsm-flask.txt
 
 THE REST
-M:	Ian Campbell <ian.campbell@citrix.com>
-M:	Ian Jackson <ian.jackson@eu.citrix.com>
-M:	Jan Beulich <jbeulich@suse.com>
 M:	Keir Fraser <keir@xen.org>
-M:	Tim Deegan <tim@xen.org>
 L:	xen-devel@lists.xen.org
 S:	Supported
 F:	*

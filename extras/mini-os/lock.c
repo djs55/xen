@@ -9,7 +9,6 @@
 #include <sys/lock.h>
 #include <sched.h>
 #include <wait.h>
-#include <mini-os/lib.h>
 
 int ___lock_init(_LOCK_T *lock)
 {

@@ -1,10 +1,9 @@
 #include <xenctrl.h>
 #include <xc_private.h>
 #include <xc_core.h>
-#include <xenstore.h>
+#include <errno.h>
 #include <unistd.h>
 
-#undef ARRAY_SIZE /* We shouldn't be including xc_private.h */
 #define ARRAY_SIZE(a) (sizeof (a) / sizeof ((a)[0]))
 
 static xc_interface *xch;
@@ -98,12 +97,11 @@ static int hp_mem_query_func(int argc, char *argv[])
     return ret;
 }
 
-static int suspend_guest(xc_interface *xch, xc_evtchn *xce, int domid,
-                         int *evtchn, int *lockfd)
+extern int xs_suspend_evtchn_port(int domid);
+
+static int suspend_guest(xc_interface *xch, xc_evtchn *xce, int domid, int *evtchn)
 {
     int port, rc, suspend_evtchn = -1;
-
-    *lockfd = -1;
 
     if (!evtchn)
         return -1;
@@ -114,8 +112,7 @@ static int suspend_guest(xc_interface *xch, xc_evtchn *xce, int domid,
         fprintf(stderr, "DOM%d: No suspend port, try live migration\n", domid);
         goto failed;
     }
-    suspend_evtchn = xc_suspend_evtchn_init_exclusive(xch, xce, domid,
-                                                      port, lockfd);
+    suspend_evtchn = xc_suspend_evtchn_init(xch, xce, domid, port);
     if (suspend_evtchn < 0)
     {
         fprintf(stderr, "Suspend evtchn initialization failed\n");
@@ -138,8 +135,7 @@ static int suspend_guest(xc_interface *xch, xc_evtchn *xce, int domid,
 
 failed:
     if (suspend_evtchn != -1)
-        xc_suspend_evtchn_release(xch, xce, domid,
-                                  suspend_evtchn, lockfd);
+        xc_suspend_evtchn_release(xch, xce, domid, suspend_evtchn);
 
     return -1;
 }
@@ -197,7 +193,7 @@ static int hp_mem_offline_func(int argc, char *argv[])
                 }
                 else if (status & PG_OFFLINE_OWNED)
                 {
-                    int result, suspend_evtchn = -1, suspend_lockfd = -1;
+                    int result, suspend_evtchn = -1;
                     xc_evtchn *xce;
                     xce = xc_evtchn_open(NULL, 0);
 
@@ -209,8 +205,7 @@ static int hp_mem_offline_func(int argc, char *argv[])
                     }
 
                     domid = status >> PG_OFFLINE_OWNER_SHIFT;
-                    if (suspend_guest(xch, xce, domid,
-                                      &suspend_evtchn, &suspend_lockfd))
+                    if (suspend_guest(xch, xce, domid, &suspend_evtchn))
                     {
                         fprintf(stderr, "Failed to suspend guest %d for"
                                 " mfn %lx\n", domid, mfn);
@@ -236,8 +231,7 @@ static int hp_mem_offline_func(int argc, char *argv[])
                                 mfn, domid);
                     }
                     xc_domain_resume(xch, domid, 1);
-                    xc_suspend_evtchn_release(xch, xce, domid,
-                                              suspend_evtchn, &suspend_lockfd);
+                    xc_suspend_evtchn_release(xch, xce, domid, suspend_evtchn);
                     xc_evtchn_close(xce);
                 }
                 break;

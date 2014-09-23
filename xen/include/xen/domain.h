@@ -12,7 +12,7 @@ typedef union {
 
 struct vcpu *alloc_vcpu(
     struct domain *d, unsigned int vcpu_id, unsigned int cpu_id);
-struct vcpu *alloc_dom0_vcpu0(struct domain *dom0);
+struct vcpu *alloc_dom0_vcpu0(void);
 int vcpu_reset(struct vcpu *);
 
 struct xen_domctl_getdomaininfo;
@@ -88,17 +88,5 @@ int continue_hypercall_on_cpu(
 extern unsigned int xen_processor_pmbits;
 
 extern bool_t opt_dom0_vcpus_pin;
-
-/* vnuma topology per domain. */
-struct vnuma_info {
-    unsigned int nr_vnodes;
-    unsigned int nr_vmemranges;
-    unsigned int *vdistance;
-    unsigned int *vcpu_to_vnode;
-    unsigned int *vnode_to_pnode;
-    struct vmemrange *vmemrange;
-};
-
-void vnuma_destroy(struct vnuma_info *vnuma);
 
 #endif /* __XEN_DOMAIN_H__ */

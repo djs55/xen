@@ -146,7 +146,6 @@ struct __large_struct { unsigned long buf[100]; };
  * aliasing issues.
  */
 #define __put_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
-	stac();								\
 	__asm__ __volatile__(						\
 		"1:	mov"itype" %"rtype"1,%2\n"			\
 		"2:\n"							\
@@ -156,11 +155,9 @@ struct __large_struct { unsigned long buf[100]; };
 		".previous\n"						\
 		_ASM_EXTABLE(1b, 3b)					\
 		: "=r"(err)						\
-		: ltype (x), "m"(__m(addr)), "i"(errret), "0"(err));	\
-	clac()
+		: ltype (x), "m"(__m(addr)), "i"(errret), "0"(err))
 
 #define __get_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
-	stac();								\
 	__asm__ __volatile__(						\
 		"1:	mov"itype" %2,%"rtype"1\n"			\
 		"2:\n"							\
@@ -171,8 +168,7 @@ struct __large_struct { unsigned long buf[100]; };
 		".previous\n"						\
 		_ASM_EXTABLE(1b, 3b)					\
 		: "=r"(err), ltype (x)					\
-		: "m"(__m(addr)), "i"(errret), "0"(err));		\
-	clac()
+		: "m"(__m(addr)), "i"(errret), "0"(err))
 
 /**
  * __copy_to_user: - Copy a block of data into user space, with less checking

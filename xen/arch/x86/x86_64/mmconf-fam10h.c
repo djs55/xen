@@ -6,7 +6,6 @@
 #include <xen/acpi.h>
 #include <xen/pci.h>
 #include <xen/pci_regs.h>
-#include <xen/pci_ids.h>
 #include <xen/init.h>
 #include <xen/dmi.h>
 #include <asm/amd.h>

@@ -20,7 +20,7 @@ _start:
         lss stack_start,%esp
         andl $(~(__STACK_SIZE-1)), %esp
         push %esi 
-        call arch_init
+        call start_kernel
 
 stack_start:
 	.long stack+(2*__STACK_SIZE), __KERNEL_SS

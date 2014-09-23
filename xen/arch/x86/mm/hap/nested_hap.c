@@ -79,7 +79,7 @@
 
 void
 nestedp2m_write_p2m_entry(struct p2m_domain *p2m, unsigned long gfn,
-    l1_pgentry_t *p, l1_pgentry_t new, unsigned int level)
+    l1_pgentry_t *p, mfn_t table_mfn, l1_pgentry_t new, unsigned int level)
 {
     struct domain *d = p2m->domain;
     uint32_t old_flags;
@@ -103,7 +103,7 @@ nestedhap_fix_p2m(struct vcpu *v, struct p2m_domain *p2m,
                   paddr_t L2_gpa, paddr_t L0_gpa,
                   unsigned int page_order, p2m_type_t p2mt, p2m_access_t p2ma)
 {
-    int rc = 0;
+    int rv = 1;
     ASSERT(p2m);
     ASSERT(p2m->set_entry);
 
@@ -124,17 +124,16 @@ nestedhap_fix_p2m(struct vcpu *v, struct p2m_domain *p2m,
         gfn = (L2_gpa >> PAGE_SHIFT) & mask;
         mfn = _mfn((L0_gpa >> PAGE_SHIFT) & mask);
 
-        rc = p2m_set_entry(p2m, gfn, mfn, page_order, p2mt, p2ma);
+        rv = set_p2m_entry(p2m, gfn, mfn, page_order, p2mt, p2ma);
     }
 
     p2m_unlock(p2m);
 
-    if ( rc )
-    {
+    if (rv == 0) {
         gdprintk(XENLOG_ERR,
-                 "failed to set entry for %#"PRIx64" -> %#"PRIx64" rc:%d\n",
-                 L2_gpa, L0_gpa, rc);
-        domain_crash(p2m->domain);
+		"failed to set entry for %#"PRIx64" -> %#"PRIx64"\n",
+		L2_gpa, L0_gpa);
+        BUG();
     }
 }
 

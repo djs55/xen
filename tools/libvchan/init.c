@@ -129,9 +129,9 @@ out:
 	return ring_ref;
 out_unmap_left:
 	if (pages_left)
-		xc_gntshr_munmap(ctrl->gntshr, ctrl->read.buffer, pages_left);
+		xc_gntshr_munmap(ctrl->gntshr, ctrl->read.buffer, pages_left * PAGE_SIZE);
 out_ring:
-	xc_gntshr_munmap(ctrl->gntshr, ring, 1);
+	xc_gntshr_munmap(ctrl->gntshr, ring, PAGE_SIZE);
 	ring_ref = -1;
 	ctrl->ring = NULL;
 	ctrl->write.order = ctrl->read.order = 0;
@@ -204,9 +204,9 @@ static int init_gnt_cli(struct libxenvchan *ctrl, int domain, uint32_t ring_ref)
  out_unmap_left:
 	if (ctrl->write.order >= PAGE_SHIFT)
 		xc_gnttab_munmap(ctrl->gnttab, ctrl->write.buffer,
-		                 1 << (ctrl->write.order - PAGE_SHIFT));
+		                 1 << ctrl->write.order);
  out_unmap_ring:
-	xc_gnttab_munmap(ctrl->gnttab, ctrl->ring, 1);
+	xc_gnttab_munmap(ctrl->gnttab, ctrl->ring, PAGE_SIZE);
 	ctrl->ring = 0;
 	ctrl->write.order = ctrl->read.order = 0;
 	rv = -1;

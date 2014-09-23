@@ -96,7 +96,7 @@ typedef struct HPETState {
     uint64_t hpet_to_ns_limit; /* max hpet ticks convertable to ns      */
     uint64_t mc_offset;
     struct periodic_time pt[HPET_TIMER_NUM];
-    rwlock_t lock;
+    spinlock_t lock;
 } HPETState;
 
 typedef struct RTCState {
@@ -113,8 +113,7 @@ typedef struct RTCState {
     /* periodic timer */
     struct periodic_time pt;
     s_time_t start_time;
-    s_time_t check_ticks_since;
-    int period;
+    int pt_code;
     uint8_t pt_dead_ticks;
     uint32_t use_timer;
     spinlock_t lock;
@@ -176,7 +175,7 @@ void destroy_periodic_time(struct periodic_time *pt);
 int pv_pit_handler(int port, int data, int write);
 void pit_reset(struct domain *d);
 
-void pit_init(struct domain *d, unsigned long cpu_khz);
+void pit_init(struct vcpu *v, unsigned long cpu_khz);
 void pit_stop_channel0_irq(PITState * pit);
 void pit_deinit(struct domain *d);
 void rtc_init(struct domain *d);
@@ -184,13 +183,14 @@ void rtc_migrate_timers(struct vcpu *v);
 void rtc_deinit(struct domain *d);
 void rtc_reset(struct domain *d);
 void rtc_update_clock(struct domain *d);
+bool_t rtc_periodic_interrupt(void *);
 
 void pmtimer_init(struct vcpu *v);
 void pmtimer_deinit(struct domain *d);
 void pmtimer_reset(struct domain *d);
 int pmtimer_change_ioport(struct domain *d, unsigned int version);
 
-void hpet_init(struct domain *d);
+void hpet_init(struct vcpu *v);
 void hpet_deinit(struct domain *d);
 void hpet_reset(struct domain *d);
 

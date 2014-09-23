@@ -125,7 +125,7 @@ struct page_info
          * PGT_partial gets set, and it must be dropped when the flag gets
          * cleared. This is so that a get() leaving a page in partially
          * validated state (where the caller would drop the reference acquired
-         * due to the getting of the type [apparently] failing [-ERESTART])
+         * due to the getting of the type [apparently] failing [-EAGAIN])
          * would not accidentally result in a page left with zero general
          * reference count, but non-zero type reference count (possible when
          * the partial get() is followed immediately by domain destruction).
@@ -551,27 +551,6 @@ void audit_domains(void);
 
 #endif
 
-/*
- * Extra fault info types which are used to further describe
- * the source of an access violation.
- */
-typedef enum {
-    npfec_kind_unknown, /* must be first */
-    npfec_kind_in_gpt,  /* violation in guest page table */
-    npfec_kind_with_gla /* violation with guest linear address */
-} npfec_kind_t;
-
-/*
- * Nested page fault exception codes.
- */
-struct npfec {
-    unsigned int read_access:1;
-    unsigned int write_access:1;
-    unsigned int insn_fetch:1;
-    unsigned int gla_valid:1;
-    unsigned int kind:2;  /* npfec_kind_t */
-};
-
 int new_guest_cr3(unsigned long pfn);
 void make_cr3(struct vcpu *v, unsigned long mfn);
 void update_cr3(struct vcpu *v);
@@ -582,9 +561,9 @@ void *do_page_walk(struct vcpu *v, unsigned long addr);
 int __sync_local_execstate(void);
 
 /* Arch-specific portion of memory_op hypercall. */
-long arch_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg);
-long subarch_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg);
-int compat_arch_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void));
+long arch_memory_op(int op, XEN_GUEST_HANDLE_PARAM(void) arg);
+long subarch_memory_op(int op, XEN_GUEST_HANDLE_PARAM(void) arg);
+int compat_arch_memory_op(int op, XEN_GUEST_HANDLE_PARAM(void));
 int compat_subarch_memory_op(int op, XEN_GUEST_HANDLE_PARAM(void));
 
 int steal_page(

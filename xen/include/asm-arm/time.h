@@ -12,6 +12,9 @@ static inline cycles_t get_cycles (void)
         return 0;
 }
 
+struct tm;
+struct tm wallclock_time(void);
+
 /* List of timer's IRQ */
 enum timer_ppi
 {
@@ -22,8 +25,11 @@ enum timer_ppi
     MAX_TIMER_PPI = 4,
 };
 
-/* Get one of the timer IRQ number */
-unsigned int timer_get_irq(enum timer_ppi ppi);
+/* Get one of the timer IRQ description */
+const struct dt_irq* timer_dt_irq(enum timer_ppi ppi);
+
+/* Route timer's IRQ on this CPU */
+extern void __cpuinit route_timer_interrupt(void);
 
 /* Set up the timer interrupt on this CPU */
 extern void __cpuinit init_timer_interrupt(void);

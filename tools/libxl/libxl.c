@@ -25,7 +25,6 @@ int libxl_ctx_alloc(libxl_ctx **pctx, int version,
                     unsigned flags, xentoollog_logger * lg)
 {
     libxl_ctx *ctx = NULL;
-    libxl__gc gc_buf, *gc = NULL;
     int rc;
 
     if (version != LIBXL_VERSION) { rc = ERROR_VERSION; goto out; }
@@ -60,10 +59,6 @@ int libxl_ctx_alloc(libxl_ctx **pctx, int version,
     LIBXL_SLIST_INIT(&ctx->watch_freeslots);
     libxl__ev_fd_init(&ctx->watch_efd);
 
-    ctx->xce = 0;
-    LIBXL_LIST_INIT(&ctx->evtchns_waiting);
-    libxl__ev_fd_init(&ctx->evtchn_efd);
-
     LIBXL_TAILQ_INIT(&ctx->death_list);
     libxl__ev_xswatch_init(&ctx->death_watch);
 
@@ -71,7 +66,6 @@ int libxl_ctx_alloc(libxl_ctx **pctx, int version,
     ctx->childproc_user = 0;
         
     ctx->sigchld_selfpipe[0] = -1;
-    ctx->sigchld_selfpipe[1] = -1;
     libxl__ev_fd_init(&ctx->sigchld_selfpipe_efd);
 
     /* The mutex is special because we can't idempotently destroy it */
@@ -85,19 +79,17 @@ int libxl_ctx_alloc(libxl_ctx **pctx, int version,
     }
 
     /* Now ctx is safe for ctx_free; failures simply set rc and "goto out" */
-    LIBXL_INIT_GC(gc_buf,ctx);
-    gc = &gc_buf;
-    /* Now gc is useable */
 
     rc = libxl__atfork_init(ctx);
     if (rc) goto out;
 
-    rc = libxl__poller_init(gc, &ctx->poller_app);
+    rc = libxl__poller_init(ctx, &ctx->poller_app);
     if (rc) goto out;
 
     ctx->xch = xc_interface_open(lg,lg,0);
     if (!ctx->xch) {
-        LOGEV(ERROR, errno, "cannot open libxc handle");
+        LIBXL__LOG_ERRNOVAL(ctx, LIBXL__LOG_ERROR, errno,
+                        "cannot open libxc handle");
         rc = ERROR_FAIL; goto out;
     }
 
@@ -105,17 +97,15 @@ int libxl_ctx_alloc(libxl_ctx **pctx, int version,
     if (!ctx->xsh)
         ctx->xsh = xs_domain_open();
     if (!ctx->xsh) {
-        LOGEV(ERROR, errno, "cannot connect to xenstore");
+        LIBXL__LOG_ERRNOVAL(ctx, LIBXL__LOG_ERROR, errno,
+                        "cannot connect to xenstore");
         rc = ERROR_FAIL; goto out;
     }
-
-    rc = libxl__ctx_evtchn_init(gc);
 
     *pctx = ctx;
     return 0;
 
  out:
-    if (gc) libxl__free_all(gc);
     libxl_ctx_free(ctx);
     *pctx = NULL;
     return rc;
@@ -154,19 +144,16 @@ int libxl_ctx_free(libxl_ctx *ctx)
     for (i = 0; i < ctx->watch_nslots; i++)
         assert(!libxl__watch_slot_contents(gc, i));
     libxl__ev_fd_deregister(gc, &ctx->watch_efd);
-    libxl__ev_fd_deregister(gc, &ctx->evtchn_efd);
     libxl__ev_fd_deregister(gc, &ctx->sigchld_selfpipe_efd);
 
     /* Now there should be no more events requested from the application: */
 
     assert(LIBXL_LIST_EMPTY(&ctx->efds));
     assert(LIBXL_TAILQ_EMPTY(&ctx->etimes));
-    assert(LIBXL_LIST_EMPTY(&ctx->evtchns_waiting));
 
     if (ctx->xch) xc_interface_close(ctx->xch);
     libxl_version_info_dispose(&ctx->version_info);
     if (ctx->xsh) xs_daemon_close(ctx->xsh);
-    if (ctx->xce) xc_evtchn_close(ctx->xce);
 
     libxl__poller_dispose(&ctx->poller_app);
     assert(LIBXL_LIST_EMPTY(&ctx->pollers_event));
@@ -206,29 +193,6 @@ void libxl_string_list_dispose(libxl_string_list *psl)
     free(sl);
 }
 
-void libxl_string_list_copy(libxl_ctx *ctx,
-                            libxl_string_list *dst,
-                            libxl_string_list *src)
-{
-    GC_INIT(ctx);
-    int i, len;
-
-    if (!*src) {
-        *dst = NULL;
-        goto out;
-    }
-
-    len = libxl_string_list_length(src);
-    /* one extra slot for sentinel */
-    *dst = libxl__calloc(NOGC, len + 1, sizeof(char *));
-
-    for (i = 0; i < len; i++)
-        (*dst)[i] = libxl__strdup(NOGC, (*src)[i]);
-
-out:
-    GC_FREE;
-}
-
 int libxl_string_list_length(const libxl_string_list *psl)
 {
     int i = 0;
@@ -236,19 +200,6 @@ int libxl_string_list_length(const libxl_string_list *psl)
     if (*psl)
         while ((*psl)[i])
             i++;
-
-    return i;
-}
-
-int libxl_key_value_list_length(libxl_key_value_list *pkvl)
-{
-    int i = 0;
-    libxl_key_value_list kvl = *pkvl;
-
-    if (kvl) {
-        while (kvl[2 * i]) /* Only checks keys */
-            i++;
-    }
 
     return i;
 }
@@ -269,33 +220,9 @@ void libxl_key_value_list_dispose(libxl_key_value_list *pkvl)
     free(kvl);
 }
 
-void libxl_key_value_list_copy(libxl_ctx *ctx,
-                               libxl_key_value_list *dst,
-                               libxl_key_value_list *src)
-{
-    GC_INIT(ctx);
-    int i, len;
-
-    if (*src == NULL) {
-        *dst = NULL;
-        goto out;
-    }
-
-    len = libxl_key_value_list_length(src);
-    /* one extra slot for sentinel */
-    *dst = libxl__calloc(NOGC, len * 2 + 1, sizeof(char *));
-
-    for (i = 0; i < len * 2; i += 2) {
-        (*dst)[i] = libxl__strdup(NOGC, (*src)[i]);
-        if ((*src)[i+1])
-            (*dst)[i+1] = libxl__strdup(NOGC, (*src)[i+1]);
-        else
-            (*dst)[i+1] = NULL;
-    }
-
-out:
-    GC_FREE;
-}
+#define LIBXL__DEFBOOL_DEFAULT (0)
+#define LIBXL__DEFBOOL_FALSE (-1)
+#define LIBXL__DEFBOOL_TRUE (1)
 
 void libxl_defbool_set(libxl_defbool *db, bool b)
 {
@@ -327,11 +254,11 @@ bool libxl_defbool_val(libxl_defbool db)
 const char *libxl_defbool_to_string(libxl_defbool b)
 {
     if (b.val < 0)
-        return LIBXL__DEFBOOL_STR_FALSE;
+        return "False";
     else if (b.val > 0)
-        return LIBXL__DEFBOOL_STR_TRUE;
+        return "True";
     else
-        return LIBXL__DEFBOOL_STR_DEFAULT;
+        return "<default>";
 }
 
 /******************************************************************************/
@@ -581,18 +508,12 @@ int libxl_domain_preserve(libxl_ctx *ctx, uint32_t domid,
     return 0;
 }
 
-static void xcinfo2xlinfo(libxl_ctx *ctx,
-                          const xc_domaininfo_t *xcinfo,
+static void xcinfo2xlinfo(const xc_domaininfo_t *xcinfo,
                           libxl_dominfo *xlinfo)
 {
-    size_t size;
-
     memcpy(&(xlinfo->uuid), xcinfo->handle, sizeof(xen_domain_handle_t));
     xlinfo->domid = xcinfo->domain;
     xlinfo->ssidref = xcinfo->ssidref;
-    if (libxl_flask_sid_to_context(ctx, xlinfo->ssidref,
-                                   &xlinfo->ssid_label, &size) < 0)
-        xlinfo->ssid_label = NULL;
 
     xlinfo->dying    = !!(xcinfo->flags&XEN_DOMINF_dying);
     xlinfo->shutdown = !!(xcinfo->flags&XEN_DOMINF_shutdown);
@@ -633,13 +554,13 @@ libxl_dominfo * libxl_list_domain(libxl_ctx *ctx, int *nb_domain_out)
 
     ret = xc_domain_getinfolist(ctx->xch, 0, 1024, info);
     if (ret<0) {
-        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "getting domain info list");
+        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "geting domain info list");
         free(ptr);
         return NULL;
     }
 
     for (i = 0; i < ret; i++) {
-        xcinfo2xlinfo(ctx, &info[i], &ptr[i]);
+        xcinfo2xlinfo(&info[i], &ptr[i]);
     }
     *nb_domain_out = ret;
     return ptr;
@@ -658,7 +579,7 @@ int libxl_domain_info(libxl_ctx *ctx, libxl_dominfo *info_r,
     if (ret==0 || xcinfo.domain != domid) return ERROR_INVAL;
 
     if (info_r)
-        xcinfo2xlinfo(ctx, &xcinfo, info_r);
+        xcinfo2xlinfo(&xcinfo, info_r);
     return 0;
 }
 
@@ -686,11 +607,6 @@ static int cpupool_info(libxl__gc *gc,
     }
 
     info->poolid = xcinfo->cpupool_id;
-    info->pool_name = libxl_cpupoolid_to_name(CTX, info->poolid);
-    if (!info->pool_name) {
-        rc = ERROR_FAIL;
-        goto out;
-    }
     info->sched = xcinfo->sched_id;
     info->n_dom = xcinfo->n_dom;
     rc = libxl_cpu_bitmap_alloc(CTX, &info->cpumap, 0);
@@ -948,7 +864,7 @@ int libxl__domain_pvcontrol_available(libxl__gc *gc, uint32_t domid)
 {
     libxl_ctx *ctx = libxl__gc_owner(gc);
 
-    uint64_t pvdriver = 0;
+    unsigned long pvdriver = 0;
     int ret;
 
     libxl_domain_type domtype = libxl__domain_type(gc, domid);
@@ -958,7 +874,7 @@ int libxl__domain_pvcontrol_available(libxl__gc *gc, uint32_t domid)
     if (domtype == LIBXL_DOMAIN_TYPE_PV)
         return 1;
 
-    ret = xc_hvm_param_get(ctx->xch, domid, HVM_PARAM_CALLBACK_IRQ, &pvdriver);
+    ret = xc_get_hvm_param(ctx->xch, domid, HVM_PARAM_CALLBACK_IRQ, &pvdriver);
     if (ret<0) {
         LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "getting HVM callback IRQ");
         return ERROR_FAIL;
@@ -966,23 +882,17 @@ int libxl__domain_pvcontrol_available(libxl__gc *gc, uint32_t domid)
     return !!pvdriver;
 }
 
-const char *libxl__domain_pvcontrol_xspath(libxl__gc *gc, uint32_t domid)
+char * libxl__domain_pvcontrol_read(libxl__gc *gc, xs_transaction_t t,
+                                    uint32_t domid)
 {
+    const char *shutdown_path;
     const char *dom_path;
 
     dom_path = libxl__xs_get_dompath(gc, domid);
     if (!dom_path)
         return NULL;
 
-    return GCSPRINTF("%s/control/shutdown", dom_path);
-}
-
-char * libxl__domain_pvcontrol_read(libxl__gc *gc, xs_transaction_t t,
-                                    uint32_t domid)
-{
-    const char *shutdown_path;
-
-    shutdown_path = libxl__domain_pvcontrol_xspath(gc, domid);
+    shutdown_path = libxl__sprintf(gc, "%s/control/shutdown", dom_path);
     if (!shutdown_path)
         return NULL;
 
@@ -993,8 +903,13 @@ int libxl__domain_pvcontrol_write(libxl__gc *gc, xs_transaction_t t,
                                   uint32_t domid, const char *cmd)
 {
     const char *shutdown_path;
+    const char *dom_path;
 
-    shutdown_path = libxl__domain_pvcontrol_xspath(gc, domid);
+    dom_path = libxl__xs_get_dompath(gc, domid);
+    if (!dom_path)
+        return ERROR_FAIL;
+
+    shutdown_path = libxl__sprintf(gc, "%s/control/shutdown", dom_path);
     if (!shutdown_path)
         return ERROR_FAIL;
 
@@ -1530,7 +1445,6 @@ static void devices_destroy_cb(libxl__egc *egc,
     uint32_t domid = dis->domid;
     char *dom_path;
     char *vm_path;
-    libxl__domain_userdata_lock *lock = NULL;
 
     dom_path = libxl__xs_get_dompath(gc, domid);
     if (!dom_path) {
@@ -1556,12 +1470,6 @@ static void devices_destroy_cb(libxl__egc *egc,
     xs_rm(ctx->xsh, XBT_NULL, libxl__sprintf(gc,
                                 "/local/domain/%d/hvmloader", domid));
 
-    /* This is async operation, we already hold CTX lock */
-    lock = libxl__lock_domain_userdata(gc, domid);
-    if (!lock) {
-        rc = ERROR_LOCK_FAIL;
-        goto out;
-    }
     libxl__userdata_destroyall(gc, domid);
 
     rc = xc_domain_destroy(ctx->xch, domid);
@@ -1573,7 +1481,6 @@ static void devices_destroy_cb(libxl__egc *egc,
     rc = 0;
 
 out:
-    if (lock) libxl__unlock_domain_userdata(lock);
     dis->callback(egc, dis, rc);
     return;
 }
@@ -1728,12 +1635,8 @@ int libxl_vncviewer_exec(libxl_ctx *ctx, uint32_t domid, int autopass)
     vnc_port = libxl__xs_read(gc, XBT_NULL,
                             libxl__sprintf(gc,
                             "/local/domain/%d/console/vnc-port", domid));
-    if (!vnc_port) {
-        LOG(ERROR, "Cannot get vnc-port of domain %d", domid);
-        goto x_fail;
-    }
-
-    port = atoi(vnc_port) - 5900;
+    if ( vnc_port )
+        port = atoi(vnc_port) - 5900;
 
     vnc_listen = libxl__xs_read(gc, XBT_NULL,
                                 libxl__sprintf(gc,
@@ -1892,15 +1795,7 @@ void libxl__device_vtpm_add(libxl__egc *egc, uint32_t domid,
     flexarray_t *front;
     flexarray_t *back;
     libxl__device *device;
-    int rc;
-    xs_transaction_t t = XBT_NULL;
-    libxl_domain_config d_config;
-    libxl_device_vtpm vtpm_saved;
-    libxl__domain_userdata_lock *lock = NULL;
-
-    libxl_domain_config_init(&d_config);
-    libxl_device_vtpm_init(&vtpm_saved);
-    libxl_device_vtpm_copy(CTX, &vtpm_saved, vtpm);
+    unsigned int rc;
 
     rc = libxl__device_vtpm_setdefault(gc, vtpm);
     if (rc) goto out;
@@ -1914,8 +1809,6 @@ void libxl__device_vtpm_add(libxl__egc *egc, uint32_t domid,
             goto out;
         }
     }
-
-    libxl__update_config_vtpm(gc, &vtpm_saved, vtpm);
 
     GCNEW(device);
     rc = libxl__device_from_vtpm(gc, domid, vtpm, device);
@@ -1942,48 +1835,10 @@ void libxl__device_vtpm_add(libxl__egc *egc, uint32_t domid,
     flexarray_append(front, "handle");
     flexarray_append(front, GCSPRINTF("%d", vtpm->devid));
 
-    if (aodev->update_json) {
-        lock = libxl__lock_domain_userdata(gc, domid);
-        if (!lock) {
-            rc = ERROR_LOCK_FAIL;
-            goto out;
-        }
-
-        rc = libxl__get_domain_configuration(gc, domid, &d_config);
-        if (rc) goto out;
-
-        DEVICE_ADD(vtpm, vtpms, domid, &vtpm_saved, COMPARE_DEVID, &d_config);
-    }
-
-    for (;;) {
-        rc = libxl__xs_transaction_start(gc, &t);
-        if (rc) goto out;
-
-        rc = libxl__device_exists(gc, t, device);
-        if (rc < 0) goto out;
-        if (rc == 1) {              /* already exists in xenstore */
-            LOG(ERROR, "device already exists in xenstore");
-            aodev->action = LIBXL__DEVICE_ACTION_ADD; /* for error message */
-            rc = ERROR_DEVICE_EXISTS;
-            goto out;
-        }
-
-        if (aodev->update_json) {
-            rc = libxl__set_domain_configuration(gc, domid, &d_config);
-            if (rc) goto out;
-        }
-
-        libxl__device_generic_add(gc, t, device,
-                                  libxl__xs_kvs_of_flexarray(gc, back,
-                                                             back->count),
-                                  libxl__xs_kvs_of_flexarray(gc, front,
-                                                             front->count),
-                                  NULL);
-
-        rc = libxl__xs_transaction_commit(gc, &t);
-        if (!rc) break;
-        if (rc < 0) goto out;
-    }
+    libxl__device_generic_add(gc, XBT_NULL, device,
+                              libxl__xs_kvs_of_flexarray(gc, back, back->count),
+                              libxl__xs_kvs_of_flexarray(gc, front, front->count),
+                              NULL);
 
     aodev->dev = device;
     aodev->action = LIBXL__DEVICE_ACTION_ADD;
@@ -1991,10 +1846,6 @@ void libxl__device_vtpm_add(libxl__egc *egc, uint32_t domid,
 
     rc = 0;
 out:
-    libxl__xs_transaction_abort(gc, &t);
-    if (lock) libxl__unlock_domain_userdata(lock);
-    libxl_device_vtpm_dispose(&vtpm_saved);
-    libxl_domain_config_dispose(&d_config);
     aodev->rc = rc;
     if(rc) aodev->callback(egc, aodev);
     return;
@@ -2135,7 +1986,7 @@ int libxl_devid_to_device_vtpm(libxl_ctx *ctx,
         if(devid == vtpms[i].devid) {
             vtpm->backend_domid = vtpms[i].backend_domid;
             vtpm->devid = vtpms[i].devid;
-            libxl_uuid_copy(ctx, &vtpm->uuid, &vtpms[i].uuid);
+            libxl_uuid_copy(&vtpm->uuid, &vtpms[i].uuid);
             rc = 0;
             break;
         }
@@ -2151,8 +2002,6 @@ int libxl_devid_to_device_vtpm(libxl_ctx *ctx,
 int libxl__device_disk_setdefault(libxl__gc *gc, libxl_device_disk *disk)
 {
     int rc;
-
-    libxl_defbool_setdefault(&disk->discard_enable, !!disk->readwrite);
 
     rc = libxl__resolve_domid(gc, disk->backend_domname, &disk->backend_domid);
     if (rc < 0) return rc;
@@ -2227,38 +2076,11 @@ static void device_disk_add(libxl__egc *egc, uint32_t domid,
     int rc;
     libxl_ctx *ctx = gc->owner;
     xs_transaction_t t = XBT_NULL;
-    libxl_domain_config d_config;
-    libxl_device_disk disk_saved;
-    libxl__domain_userdata_lock *lock = NULL;
-
-    libxl_domain_config_init(&d_config);
-    libxl_device_disk_init(&disk_saved);
-    libxl_device_disk_copy(ctx, &disk_saved, disk);
 
     libxl_domain_type type = libxl__domain_type(gc, domid);
     if (type == LIBXL_DOMAIN_TYPE_INVALID) {
         rc = ERROR_FAIL;
         goto out;
-    }
-
-    /*
-     * get_vdev != NULL -> local attach
-     * get_vdev == NULL -> block attach
-     *
-     * We don't care about local attach state because it's only
-     * intermediate state.
-     */
-    if (!get_vdev && aodev->update_json) {
-        lock = libxl__lock_domain_userdata(gc, domid);
-        if (!lock) {
-            rc = ERROR_LOCK_FAIL;
-            goto out;
-        }
-
-        rc = libxl__get_domain_configuration(gc, domid, &d_config);
-        if (rc) goto out;
-
-        DEVICE_ADD(disk, disks, domid, &disk_saved, COMPARE_DISK, &d_config);
     }
 
     for (;;) {
@@ -2285,15 +2107,6 @@ static void device_disk_add(libxl__egc *egc, uint32_t domid,
         if (rc != 0) {
             LIBXL__LOG(ctx, LIBXL__LOG_ERROR, "Invalid or unsupported"
                    " virtual disk identifier %s", disk->vdev);
-            goto out;
-        }
-
-        rc = libxl__device_exists(gc, t, device);
-        if (rc < 0) goto out;
-        if (rc == 1) {              /* already exists in xenstore */
-            LOG(ERROR, "device already exists in xenstore");
-            aodev->action = LIBXL__DEVICE_ACTION_ADD; /* for error message */
-            rc = ERROR_DEVICE_EXISTS;
             goto out;
         }
 
@@ -2379,13 +2192,6 @@ static void device_disk_add(libxl__egc *egc, uint32_t domid,
         flexarray_append(back, disk->readwrite ? "w" : "r");
         flexarray_append(back, "device-type");
         flexarray_append(back, disk->is_cdrom ? "cdrom" : "disk");
-        if (disk->direct_io_safe) {
-            flexarray_append(back, "direct-io-safe");
-            flexarray_append(back, "1");
-        }
-        flexarray_append_pair(back, "discard-enable",
-                              libxl_defbool_val(disk->discard_enable) ?
-                              "1" : "0");
 
         flexarray_append(front, "backend-id");
         flexarray_append(front, libxl__sprintf(gc, "%d", disk->backend_domid));
@@ -2413,11 +2219,6 @@ static void device_disk_add(libxl__egc *egc, uint32_t domid,
             }
         }
 
-        if (!get_vdev && aodev->update_json) {
-            rc = libxl__set_domain_configuration(gc, domid, &d_config);
-            if (rc) goto out;
-        }
-
         libxl__device_generic_add(gc, t, device,
                                   libxl__xs_kvs_of_flexarray(gc, back, back->count),
                                   libxl__xs_kvs_of_flexarray(gc, front, front->count),
@@ -2436,9 +2237,6 @@ static void device_disk_add(libxl__egc *egc, uint32_t domid,
 
 out:
     libxl__xs_transaction_abort(gc, &t);
-    if (lock) libxl__unlock_domain_userdata(lock);
-    libxl_device_disk_dispose(&disk_saved);
-    libxl_domain_config_dispose(&d_config);
     aodev->rc = rc;
     if (rc) aodev->callback(egc, aodev);
     return;
@@ -2664,26 +2462,14 @@ int libxl_cdrom_insert(libxl_ctx *ctx, uint32_t domid, libxl_device_disk *disk,
 {
     AO_CREATE(ctx, domid, ao_how);
     int num = 0, i;
-    libxl_device_disk *disks = NULL, disk_saved, disk_empty;
-    libxl_domain_config d_config;
+    libxl_device_disk *disks = NULL;
     int rc, dm_ver;
+
     libxl__device device;
     const char * path;
     char * tmp;
-    libxl__domain_userdata_lock *lock = NULL;
-    xs_transaction_t t = XBT_NULL;
-    flexarray_t *insert = NULL, *empty = NULL;
 
-    libxl_domain_config_init(&d_config);
-    libxl_device_disk_init(&disk_empty);
-    libxl_device_disk_init(&disk_saved);
-    libxl_device_disk_copy(ctx, &disk_saved, disk);
-
-    disk_empty.format = LIBXL_DISK_FORMAT_EMPTY;
-    disk_empty.vdev = libxl__strdup(NOGC, disk->vdev);
-    disk_empty.pdev_path = libxl__strdup(NOGC, "");
-    disk_empty.is_cdrom = 1;
-    libxl__device_disk_setdefault(gc, &disk_empty);
+    flexarray_t *insert = NULL;
 
     libxl_domain_type type = libxl__domain_type(gc, domid);
     if (type == LIBXL_DOMAIN_TYPE_INVALID) {
@@ -2735,7 +2521,23 @@ int libxl_cdrom_insert(libxl_ctx *ctx, uint32_t domid, libxl_device_disk *disk,
     rc = libxl__device_from_disk(gc, domid, disk, &device);
     if (rc) goto out;
 
+    if (dm_ver == LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN) {
+        rc = libxl__qmp_insert_cdrom(gc, domid, disk);
+        if (rc) goto out;
+    }
+
     path = libxl__device_backend_path(gc, &device);
+
+    /* Sanity check: make sure the backend exists before writing here */
+    tmp = libxl__xs_read(gc, XBT_NULL, libxl__sprintf(gc, "%s/frontend", path));
+    if (!tmp)
+    {
+        LIBXL__LOG(ctx, LIBXL__LOG_ERROR, "Internal error: %s does not exist",
+            libxl__sprintf(gc, "%s/frontend", path));
+        rc = ERROR_FAIL;
+        goto out;
+    }
+
 
     insert = flexarray_make(gc, 4, 1);
 
@@ -2749,84 +2551,9 @@ int libxl_cdrom_insert(libxl_ctx *ctx, uint32_t domid, libxl_device_disk *disk,
     else
         flexarray_append_pair(insert, "params", "");
 
-    empty = flexarray_make(gc, 4, 1);
-    flexarray_append_pair(empty, "type",
-                          libxl__device_disk_string_of_backend(disk->backend));
-    flexarray_append_pair(empty, "params", "");
-
-    /* Note: CTX lock is already held at this point so lock hierarchy
-     * is maintained.
-     */
-    lock = libxl__lock_domain_userdata(gc, domid);
-    if (!lock) {
-        rc = ERROR_LOCK_FAIL;
-        goto out;
-    }
-
-    /* We need to eject the original image first. This is implemented
-     * by inserting empty media. JSON is not updated.
-     */
-    if (dm_ver == LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN) {
-        rc = libxl__qmp_insert_cdrom(gc, domid, &disk_empty);
-        if (rc) goto out;
-    }
-
-    for (;;) {
-        rc = libxl__xs_transaction_start(gc, &t);
-        if (rc) goto out;
-        /* Sanity check: make sure the backend exists before writing here */
-        tmp = libxl__xs_read(gc, t, libxl__sprintf(gc, "%s/frontend", path));
-        if (!tmp)
-        {
-            LIBXL__LOG(ctx, LIBXL__LOG_ERROR, "Internal error: %s does not exist",
-                       libxl__sprintf(gc, "%s/frontend", path));
-            rc = ERROR_FAIL;
-            goto out;
-        }
-
-        rc = libxl__xs_writev(gc, t, path,
-                              libxl__xs_kvs_of_flexarray(gc, empty, empty->count));
-        if (rc) goto out;
-
-        rc = libxl__xs_transaction_commit(gc, &t);
-        if (!rc) break;
-        if (rc < 0) goto out;
-    }
-
-    rc = libxl__get_domain_configuration(gc, domid, &d_config);
+    rc = libxl__xs_writev_atonce(gc, path,
+                        libxl__xs_kvs_of_flexarray(gc, insert, insert->count));
     if (rc) goto out;
-
-    DEVICE_ADD(disk, disks, domid, &disk_saved, COMPARE_DISK, &d_config);
-
-    if (dm_ver == LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN) {
-        rc = libxl__qmp_insert_cdrom(gc, domid, disk);
-        if (rc) goto out;
-    }
-
-    for (;;) {
-        rc = libxl__xs_transaction_start(gc, &t);
-        if (rc) goto out;
-        /* Sanity check: make sure the backend exists before writing here */
-        tmp = libxl__xs_read(gc, t, libxl__sprintf(gc, "%s/frontend", path));
-        if (!tmp)
-        {
-            LIBXL__LOG(ctx, LIBXL__LOG_ERROR, "Internal error: %s does not exist",
-                       libxl__sprintf(gc, "%s/frontend", path));
-            rc = ERROR_FAIL;
-            goto out;
-        }
-
-        rc = libxl__set_domain_configuration(gc, domid, &d_config);
-        if (rc) goto out;
-
-        rc = libxl__xs_writev(gc, t, path,
-                              libxl__xs_kvs_of_flexarray(gc, insert, insert->count));
-        if (rc) goto out;
-
-        rc = libxl__xs_transaction_commit(gc, &t);
-        if (!rc) break;
-        if (rc < 0) goto out;
-    }
 
     /* success, no actual async */
     libxl__ao_complete(egc, ao, 0);
@@ -2834,15 +2561,9 @@ int libxl_cdrom_insert(libxl_ctx *ctx, uint32_t domid, libxl_device_disk *disk,
     rc = 0;
 
 out:
-    libxl__xs_transaction_abort(gc, &t);
     for (i = 0; i < num; i++)
         libxl_device_disk_dispose(&disks[i]);
     free(disks);
-    libxl_device_disk_dispose(&disk_empty);
-    libxl_device_disk_dispose(&disk_saved);
-    libxl_domain_config_dispose(&d_config);
-
-    if (lock) libxl__unlock_domain_userdata(lock);
 
     if (rc) return AO_ABORT(rc);
     return AO_INPROGRESS;
@@ -3097,7 +2818,8 @@ int libxl__device_nic_setdefault(libxl__gc *gc, libxl_device_nic *nic,
         nic->model = strdup("rtl8139");
         if (!nic->model) return ERROR_NOMEM;
     }
-    if (libxl__mac_is_default(&nic->mac)) {
+    if (!nic->mac[0] && !nic->mac[1] && !nic->mac[2] &&
+        !nic->mac[3] && !nic->mac[4] && !nic->mac[5]) {
         const uint8_t *r;
         libxl_uuid uuid;
 
@@ -3170,15 +2892,7 @@ void libxl__device_nic_add(libxl__egc *egc, uint32_t domid,
     flexarray_t *front;
     flexarray_t *back;
     libxl__device *device;
-    int rc;
-    xs_transaction_t t = XBT_NULL;
-    libxl_domain_config d_config;
-    libxl_device_nic nic_saved;
-    libxl__domain_userdata_lock *lock = NULL;
-
-    libxl_domain_config_init(&d_config);
-    libxl_device_nic_init(&nic_saved);
-    libxl_device_nic_copy(CTX, &nic_saved, nic);
+    unsigned int rc;
 
     rc = libxl__device_nic_setdefault(gc, nic, domid);
     if (rc) goto out;
@@ -3192,8 +2906,6 @@ void libxl__device_nic_add(libxl__egc *egc, uint32_t domid,
             goto out;
         }
     }
-
-    libxl__update_config_nic(gc, &nic_saved, nic);
 
     GCNEW(device);
     rc = libxl__device_from_nic(gc, domid, nic, device);
@@ -3251,49 +2963,10 @@ void libxl__device_nic_add(libxl__egc *egc, uint32_t domid,
     flexarray_append(front, "mac");
     flexarray_append(front, libxl__sprintf(gc,
                                     LIBXL_MAC_FMT, LIBXL_MAC_BYTES(nic->mac)));
-
-    if (aodev->update_json) {
-        lock = libxl__lock_domain_userdata(gc, domid);
-        if (!lock) {
-            rc = ERROR_LOCK_FAIL;
-            goto out;
-        }
-
-        rc = libxl__get_domain_configuration(gc, domid, &d_config);
-        if (rc) goto out;
-
-        DEVICE_ADD(nic, nics, domid, &nic_saved, COMPARE_DEVID, &d_config);
-    }
-
-    for (;;) {
-        rc = libxl__xs_transaction_start(gc, &t);
-        if (rc) goto out;
-
-        rc = libxl__device_exists(gc, t, device);
-        if (rc < 0) goto out;
-        if (rc == 1) {              /* already exists in xenstore */
-            LOG(ERROR, "device already exists in xenstore");
-            aodev->action = LIBXL__DEVICE_ACTION_ADD; /* for error message */
-            rc = ERROR_DEVICE_EXISTS;
-            goto out;
-        }
-
-        if (aodev->update_json) {
-            rc = libxl__set_domain_configuration(gc, domid, &d_config);
-            if (rc) goto out;
-        }
-
-        libxl__device_generic_add(gc, t, device,
-                                  libxl__xs_kvs_of_flexarray(gc, back,
-                                                             back->count),
-                                  libxl__xs_kvs_of_flexarray(gc, front,
-                                                             front->count),
-                                  NULL);
-
-        rc = libxl__xs_transaction_commit(gc, &t);
-        if (!rc) break;
-        if (rc < 0) goto out;
-    }
+    libxl__device_generic_add(gc, XBT_NULL, device,
+                              libxl__xs_kvs_of_flexarray(gc, back, back->count),
+                              libxl__xs_kvs_of_flexarray(gc, front, front->count),
+                              NULL);
 
     aodev->dev = device;
     aodev->action = LIBXL__DEVICE_ACTION_ADD;
@@ -3301,10 +2974,6 @@ void libxl__device_nic_add(libxl__egc *egc, uint32_t domid,
 
     rc = 0;
 out:
-    libxl__xs_transaction_abort(gc, &t);
-    if (lock) libxl__unlock_domain_userdata(lock);
-    libxl_device_nic_dispose(&nic_saved);
-    libxl_domain_config_dispose(&d_config);
     aodev->rc = rc;
     if (rc) aodev->callback(egc, aodev);
     return;
@@ -3489,9 +3158,9 @@ const char *libxl__device_nic_devname(libxl__gc *gc,
 {
     switch (type) {
     case LIBXL_NIC_TYPE_VIF:
-        return GCSPRINTF(NETBACK_NIC_NAME, domid, devid);
+        return GCSPRINTF("vif%u.%d", domid, devid);
     case LIBXL_NIC_TYPE_VIF_IOEMU:
-        return GCSPRINTF(NETBACK_NIC_NAME TAP_DEVICE_SUFFIX, domid, devid);
+        return GCSPRINTF("vif%u.%d" TAP_DEVICE_SUFFIX, domid, devid);
     default:
         abort();
     }
@@ -3858,7 +3527,6 @@ DEFINE_DEVICE_REMOVE(vtpm, destroy, 1)
         GCNEW(aodev);                                                   \
         libxl__prepare_ao_device(ao, aodev);                            \
         aodev->callback = device_addrm_aocomplete;                      \
-        aodev->update_json = true;                                      \
         libxl__device_##type##_add(egc, domid, type, aodev);            \
                                                                         \
         return AO_INPROGRESS;                                           \
@@ -4213,8 +3881,7 @@ int libxl_device_events_handler(libxl_ctx *ctx,
 
 out:
     GC_FREE;
-    if (rc) return AO_ABORT(rc);
-    return AO_INPROGRESS;
+    return rc ? : AO_INPROGRESS;
 }
 
 /******************************************************************************/
@@ -4256,8 +3923,7 @@ out:
     return rc;
 }
 
-static int libxl__fill_dom0_memory_info(libxl__gc *gc, uint32_t *target_memkb,
-                                        uint32_t *max_memkb)
+static int libxl__fill_dom0_memory_info(libxl__gc *gc, uint32_t *target_memkb)
 {
     int rc;
     libxl_dominfo info;
@@ -4291,17 +3957,6 @@ retry_transaction:
         }
     }
 
-    if (staticmax) {
-        *max_memkb = strtoul(staticmax, &endptr, 10);
-        if (*endptr != '\0') {
-            LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR,
-                             "invalid memory static-max %s from %s\n",
-                             staticmax, max_path);
-            rc = ERROR_FAIL;
-            goto out;
-        }
-    }
-
     rc = libxl_domain_info(ctx, &info, 0);
     if (rc < 0)
         goto out;
@@ -4315,11 +3970,9 @@ retry_transaction:
                 (uint32_t) info.current_memkb);
         *target_memkb = (uint32_t) info.current_memkb;
     }
-    if (staticmax == NULL) {
+    if (staticmax == NULL)
         libxl__xs_write(gc, t, max_path, "%"PRIu32,
-                        (uint32_t) info.max_memkb);
-        *max_memkb = (uint32_t) info.max_memkb;
-    }
+                (uint32_t) info.max_memkb);
 
     if (freememslack == NULL) {
         free_mem_slack_kb = (uint32_t) (PAGE_TO_MEMKB(physinfo.total_pages) -
@@ -4350,12 +4003,12 @@ static int libxl__get_free_memory_slack(libxl__gc *gc, uint32_t *free_mem_slack)
     int rc;
     char *free_mem_slack_path = "/local/domain/0/memory/freemem-slack";
     char *free_mem_slack_s, *endptr;
-    uint32_t target_memkb, max_memkb;
+    uint32_t target_memkb;
 
 retry:
     free_mem_slack_s = libxl__xs_read(gc, XBT_NULL, free_mem_slack_path);
     if (!free_mem_slack_s) {
-        rc = libxl__fill_dom0_memory_info(gc, &target_memkb, &max_memkb);
+        rc = libxl__fill_dom0_memory_info(gc, &target_memkb);
         if (rc < 0)
             return rc;
         goto retry;
@@ -4378,7 +4031,6 @@ int libxl_set_memory_target(libxl_ctx *ctx, uint32_t domid,
     int rc = 1, abort_transaction = 0;
     uint32_t memorykb = 0, videoram = 0;
     uint32_t current_target_memkb = 0, new_target_memkb = 0;
-    uint32_t current_max_memkb = 0;
     char *memmax, *endptr, *videoram_s = NULL, *target = NULL;
     char *dompath = libxl__xs_get_dompath(gc, domid);
     xc_domaininfo_t info;
@@ -4394,8 +4046,7 @@ retry_transaction:
     if (!target && !domid) {
         if (!xs_transaction_end(ctx->xsh, t, 1))
             goto out_no_transaction;
-        rc = libxl__fill_dom0_memory_info(gc, &current_target_memkb,
-                                          &current_max_memkb);
+        rc = libxl__fill_dom0_memory_info(gc, &current_target_memkb);
         if (rc < 0)
             goto out_no_transaction;
         goto retry_transaction;
@@ -4491,13 +4142,10 @@ retry_transaction:
         abort_transaction = 1;
         goto out;
     }
-
-    libxl_dominfo_init(&ptr);
-    xcinfo2xlinfo(ctx, &info, &ptr);
+    xcinfo2xlinfo(&info, &ptr);
     uuid = libxl__uuid2string(gc, ptr.uuid);
     libxl__xs_write(gc, t, libxl__sprintf(gc, "/vm/%s/memory", uuid),
             "%"PRIu32, new_target_memkb / 1024);
-    libxl_dominfo_dispose(&ptr);
 
 out:
     if (!xs_transaction_end(ctx->xsh, t, abort_transaction)
@@ -4510,75 +4158,38 @@ out_no_transaction:
     return rc;
 }
 
-/* out_target_memkb and out_max_memkb can be NULL */
-static int libxl__get_memory_target(libxl__gc *gc, uint32_t domid,
-                                    uint32_t *out_target_memkb,
-                                    uint32_t *out_max_memkb)
+int libxl_get_memory_target(libxl_ctx *ctx, uint32_t domid, uint32_t *out_target)
 {
-    int rc;
-    char *target = NULL, *static_max = NULL, *endptr = NULL;
+    GC_INIT(ctx);
+    int rc = 1;
+    char *target = NULL, *endptr = NULL;
     char *dompath = libxl__xs_get_dompath(gc, domid);
-    uint32_t target_memkb, max_memkb;
+    uint32_t target_memkb;
 
     target = libxl__xs_read(gc, XBT_NULL, libxl__sprintf(gc,
-                    "%s/memory/target", dompath));
-    static_max = libxl__xs_read(gc, XBT_NULL, libxl__sprintf(gc,
-                    "%s/memory/static-max", dompath));
-
-    rc = ERROR_FAIL;
-    if ((!target || !static_max) && !domid) {
-        rc = libxl__fill_dom0_memory_info(gc, &target_memkb,
-                                          &max_memkb);
+                "%s/memory/target", dompath));
+    if (!target && !domid) {
+        rc = libxl__fill_dom0_memory_info(gc, &target_memkb);
         if (rc < 0)
             goto out;
     } else if (!target) {
-        LIBXL__LOG_ERRNO(CTX, LIBXL__LOG_ERROR,
+        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR,
                 "cannot get target memory info from %s/memory/target\n",
-                dompath);
-        goto out;
-    } else if (!static_max) {
-        LIBXL__LOG_ERRNO(CTX, LIBXL__LOG_ERROR,
-                "cannot get target memory info from %s/memory/static-max\n",
                 dompath);
         goto out;
     } else {
         target_memkb = strtoul(target, &endptr, 10);
         if (*endptr != '\0') {
-            LIBXL__LOG_ERRNO(CTX, LIBXL__LOG_ERROR,
+            LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR,
                     "invalid memory target %s from %s/memory/target\n",
                     target, dompath);
             goto out;
         }
-        max_memkb = strtoul(static_max, &endptr, 10);
-        if (*endptr != '\0') {
-            LIBXL__LOG_ERRNO(CTX, LIBXL__LOG_ERROR,
-                    "invalid memory target %s from %s/memory/static-max\n",
-                    static_max, dompath);
-            goto out;
-        }
-
     }
-
-    if (out_target_memkb)
-        *out_target_memkb = target_memkb;
-
-    if (out_max_memkb)
-        *out_max_memkb = max_memkb;
-
+    *out_target = target_memkb;
     rc = 0;
 
 out:
-    return rc;
-}
-
-int libxl_get_memory_target(libxl_ctx *ctx, uint32_t domid,
-                            uint32_t *out_target)
-{
-    GC_INIT(ctx);
-    int rc;
-
-    rc = libxl__get_memory_target(gc, domid, out_target, NULL);
-
     GC_FREE;
     return rc;
 }
@@ -4949,17 +4560,12 @@ libxl_vcpuinfo *libxl_list_vcpu(libxl_ctx *ctx, uint32_t domid,
         libxl_bitmap_init(&ptr->cpumap);
         if (libxl_cpu_bitmap_alloc(ctx, &ptr->cpumap, 0))
             goto err;
-        libxl_bitmap_init(&ptr->cpumap_soft);
-        if (libxl_cpu_bitmap_alloc(ctx, &ptr->cpumap_soft, 0))
-            goto err;
         if (xc_vcpu_getinfo(ctx->xch, domid, *nr_vcpus_out, &vcpuinfo) == -1) {
             LOGE(ERROR, "getting vcpu info");
             goto err;
         }
-
         if (xc_vcpu_getaffinity(ctx->xch, domid, *nr_vcpus_out,
-                                ptr->cpumap.map, ptr->cpumap_soft.map,
-                                XEN_VCPUAFFINITY_SOFT|XEN_VCPUAFFINITY_HARD) == -1) {
+                                ptr->cpumap.map) == -1) {
             LOGE(ERROR, "getting vcpu affinity");
             goto err;
         }
@@ -4975,105 +4581,33 @@ libxl_vcpuinfo *libxl_list_vcpu(libxl_ctx *ctx, uint32_t domid,
 
 err:
     libxl_bitmap_dispose(&ptr->cpumap);
-    libxl_bitmap_dispose(&ptr->cpumap_soft);
     free(ret);
     GC_FREE;
     return NULL;
 }
 
 int libxl_set_vcpuaffinity(libxl_ctx *ctx, uint32_t domid, uint32_t vcpuid,
-                           const libxl_bitmap *cpumap_hard,
-                           const libxl_bitmap *cpumap_soft)
+                           libxl_bitmap *cpumap)
 {
-    GC_INIT(ctx);
-    libxl_bitmap hard, soft;
-    int rc, flags = 0;
-
-    libxl_bitmap_init(&hard);
-    libxl_bitmap_init(&soft);
-
-    if (!cpumap_hard && !cpumap_soft) {
-        rc = ERROR_INVAL;
-        goto out;
+    if (xc_vcpu_setaffinity(ctx->xch, domid, vcpuid, cpumap->map)) {
+        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "setting vcpu affinity");
+        return ERROR_FAIL;
     }
-
-    /*
-     * Xen wants writable hard and/or soft cpumaps, to put back in them
-     * the effective hard and/or soft affinity that will be used.
-     */
-    if (cpumap_hard) {
-        rc = libxl_cpu_bitmap_alloc(ctx, &hard, 0);
-        if (rc)
-            goto out;
-
-        libxl_bitmap_copy(ctx, &hard, cpumap_hard);
-        flags = XEN_VCPUAFFINITY_HARD;
-    }
-    if (cpumap_soft) {
-        rc = libxl_cpu_bitmap_alloc(ctx, &soft, 0);
-        if (rc)
-            goto out;
-
-        libxl_bitmap_copy(ctx, &soft, cpumap_soft);
-        flags |= XEN_VCPUAFFINITY_SOFT;
-    }
-
-    if (xc_vcpu_setaffinity(ctx->xch, domid, vcpuid,
-                            cpumap_hard ? hard.map : NULL,
-                            cpumap_soft ? soft.map : NULL,
-                            flags)) {
-        LOGE(ERROR, "setting vcpu affinity");
-        rc = ERROR_FAIL;
-        goto out;
-    }
-
-    /*
-     * Let's check the results. Hard affinity will never be empty, but it
-     * is possible that Xen will use something different from what we asked
-     * for various reasons. If that's the case, report it.
-     */
-    if (cpumap_hard &&
-        !libxl_bitmap_equal(cpumap_hard, &hard, 0))
-        LOG(DEBUG, "New hard affinity for vcpu %d has unreachable cpus",
-        vcpuid);
-    /*
-     * Soft affinity can both be different from what asked and empty. Check
-     * for (and report) both.
-     */
-    if (cpumap_soft) {
-        if (!libxl_bitmap_equal(cpumap_soft, &soft, 0))
-            LOG(DEBUG, "New soft affinity for vcpu %d has unreachable cpus",
-                vcpuid);
-        if (libxl_bitmap_is_empty(&soft))
-            LOG(WARN, "all cpus in soft affinity of vcpu %d are unreachable."
-                " Only hard affinity will be considered for scheduling",
-                vcpuid);
-    }
-
-    rc = 0;
- out:
-    libxl_bitmap_dispose(&hard);
-    libxl_bitmap_dispose(&soft);
-    GC_FREE;
-    return rc;
+    return 0;
 }
 
 int libxl_set_vcpuaffinity_all(libxl_ctx *ctx, uint32_t domid,
-                               unsigned int max_vcpus,
-                               const libxl_bitmap *cpumap_hard,
-                               const libxl_bitmap *cpumap_soft)
+                               unsigned int max_vcpus, libxl_bitmap *cpumap)
 {
-    GC_INIT(ctx);
     int i, rc = 0;
 
     for (i = 0; i < max_vcpus; i++) {
-        if (libxl_set_vcpuaffinity(ctx, domid, i, cpumap_hard, cpumap_soft)) {
-            LOG(WARN, "failed to set affinity for %d", i);
+        if (libxl_set_vcpuaffinity(ctx, domid, i, cpumap)) {
+            LIBXL__LOG(ctx, LIBXL__LOG_WARNING,
+                       "failed to set affinity for %d", i);
             rc = ERROR_FAIL;
         }
     }
-
-    GC_FREE;
     return rc;
 }
 
@@ -5514,7 +5048,7 @@ static int libxl__domain_s3_resume(libxl__gc *gc, int domid)
     case LIBXL_DOMAIN_TYPE_HVM:
         switch (libxl__device_model_version_running(gc, domid)) {
         case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN_TRADITIONAL:
-            rc = xc_hvm_param_set(CTX->xch, domid, HVM_PARAM_ACPI_S_STATE, 0);
+            rc = xc_set_hvm_param(CTX->xch, domid, HVM_PARAM_ACPI_S_STATE, 0);
             break;
         case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN:
             rc = libxl__qmp_system_wakeup(gc, domid);
@@ -6112,207 +5646,6 @@ int libxl_fd_set_cloexec(libxl_ctx *ctx, int fd, int cloexec)
 
 int libxl_fd_set_nonblock(libxl_ctx *ctx, int fd, int nonblock)
   { return fd_set_flags(ctx,fd, F_GETFL,F_SETFL,"FL", O_NONBLOCK, nonblock); }
-
-
-void libxl_hwcap_copy(libxl_ctx *ctx,libxl_hwcap *dst, libxl_hwcap *src)
-{
-    int i;
-
-    for (i = 0; i < 8; i++)
-        (*dst)[i] = (*src)[i];
-}
-
-void libxl_mac_copy(libxl_ctx *ctx, libxl_mac *dst, libxl_mac *src)
-{
-    int i;
-
-    for (i = 0; i < 6; i++)
-        (*dst)[i] = (*src)[i];
-}
-
-int libxl_retrieve_domain_configuration(libxl_ctx *ctx, uint32_t domid,
-                                        libxl_domain_config *d_config)
-{
-    GC_INIT(ctx);
-    int rc;
-    libxl__domain_userdata_lock *lock = NULL;
-
-    CTX_LOCK;
-
-    lock = libxl__lock_domain_userdata(gc, domid);
-    if (!lock) {
-        rc = ERROR_LOCK_FAIL;
-        goto out;
-    }
-
-    rc = libxl__get_domain_configuration(gc, domid, d_config);
-    if (rc) {
-        LOG(ERROR, "fail to get domain configuration for domain %d", domid);
-        rc = ERROR_FAIL;
-        goto out;
-    }
-
-    /* Domain name */
-    {
-        char *domname;
-        domname = libxl_domid_to_name(ctx, domid);
-        if (!domname) {
-            LOG(ERROR, "fail to get domain name for domain %d", domid);
-            goto out;
-        }
-        free(d_config->c_info.name);
-        d_config->c_info.name = domname; /* steals allocation */
-    }
-
-    /* Domain UUID */
-    {
-        libxl_dominfo info;
-        rc = libxl_domain_info(ctx, &info, domid);
-        if (rc) {
-            LOG(ERROR, "fail to get domain info for domain %d", domid);
-            goto out;
-        }
-        libxl_uuid_copy(ctx, &d_config->c_info.uuid, &info.uuid);
-    }
-
-    /* Memory limits:
-     *
-     * Currently there are three memory limits:
-     *  1. "target" in xenstore (originally memory= in config file)
-     *  2. "static-max" in xenstore (originally maxmem= in config file)
-     *  3. "max_memkb" in hypervisor
-     *
-     * The third one is not visible and currently managed by
-     * toolstack. In order to rebuild a domain we only need to have
-     * "target" and "static-max".
-     */
-    {
-        uint32_t target_memkb = 0, max_memkb = 0;
-
-        /* "target" */
-        rc = libxl__get_memory_target(gc, domid, &target_memkb, &max_memkb);
-        if (rc) {
-            LOG(ERROR, "fail to get memory target for domain %d", domid);
-            goto out;
-        }
-        /* Target memory in xenstore is different from what user has
-         * asked for. The difference is video_memkb. See
-         * libxl_set_memory_target.
-         */
-        d_config->b_info.target_memkb = target_memkb +
-            d_config->b_info.video_memkb;
-
-        d_config->b_info.max_memkb = max_memkb;
-    }
-
-    /* Devices: disk, nic, vtpm, pcidev etc. */
-
-    /* The MERGE macro implements following logic:
-     * 0. retrieve JSON (done by now)
-     * 1. retrieve list of device from xenstore
-     * 2. use xenstore entries as primary reference and compare JSON
-     *    entries with them.
-     *    a. if a device is present in xenstore and in JSON, merge the
-     *       two views.
-     *    b. if a device is not present in xenstore but in JSON, delete
-     *       it from the result.
-     *    c. it's impossible to have an entry present in xenstore but
-     *       not in JSON, because we maintain an invariant that every
-     *       entry in xenstore must have a corresponding entry in JSON.
-     * 3. "merge" operates on "src" and "dst". "src" points to the
-     *    entry retrieved from xenstore while "dst" points to the entry
-     *    retrieve from JSON.
-     */
-#define MERGE(type, ptr, compare, merge)                                \
-    do {                                                                \
-        libxl_device_##type *p = NULL;                                  \
-        int i, j, num;                                                  \
-                                                                        \
-        p = libxl_device_##type##_list(CTX, domid, &num);               \
-        if (p == NULL) {                                                \
-            LOG(DEBUG,                                                  \
-                "no %s from xenstore for domain %d",                    \
-                #type, domid);                                          \
-        }                                                               \
-                                                                        \
-        for (i = 0; i < d_config->num_##ptr; i++) {                     \
-            libxl_device_##type *q = &d_config->ptr[i];                 \
-            for (j = 0; j < num; j++) {                                 \
-                if (compare(&p[j], q))                                  \
-                    break;                                              \
-            }                                                           \
-                                                                        \
-            if (j < num) {         /* found in xenstore */              \
-                libxl_device_##type *dst, *src;                         \
-                dst = q;                                                \
-                src = &p[j];                                            \
-                merge;                                                  \
-            } else {                /* not found in xenstore */         \
-                LOG(WARN,                                               \
-                "Device present in JSON but not in xenstore, ignored"); \
-                                                                        \
-                libxl_device_##type##_dispose(q);                       \
-                                                                        \
-                for (j = i; j < d_config->num_##ptr - 1; j++)           \
-                    memcpy(&d_config->ptr[j], &d_config->ptr[j+1],      \
-                           sizeof(libxl_device_##type));                \
-                                                                        \
-                d_config->ptr =                                         \
-                    libxl__realloc(NOGC, d_config->ptr,                 \
-                                   sizeof(libxl_device_##type) *        \
-                                   (d_config->num_##ptr - 1));          \
-                                                                        \
-                /* rewind counters */                                   \
-                d_config->num_##ptr--;                                  \
-                i--;                                                    \
-            }                                                           \
-        }                                                               \
-                                                                        \
-        for (i = 0; i < num; i++)                                       \
-            libxl_device_##type##_dispose(&p[i]);                       \
-        free(p);                                                        \
-    } while (0);
-
-    MERGE(nic, nics, COMPARE_DEVID, {});
-
-    MERGE(vtpm, vtpms, COMPARE_DEVID, {});
-
-    MERGE(pci, pcidevs, COMPARE_PCI, {});
-
-    /* Take care of removable device. We maintain invariant in the
-     * insert / remove operation so that:
-     * 1. if xenstore is "empty" while JSON is not, the result
-     *    is "empty"
-     * 2. if xenstore has a different media than JSON, use the
-     *    one in JSON
-     * 3. if xenstore and JSON have the same media, well, you
-     *    know the answer :-)
-     *
-     * Currently there is only one removable device -- CDROM.
-     * Look for libxl_cdrom_insert for reference.
-     */
-    MERGE(disk, disks, COMPARE_DISK, {
-            if (src->removable) {
-                if (!src->pdev_path || *src->pdev_path == '\0') {
-                    /* 1, no media in drive */
-                    free(dst->pdev_path);
-                    dst->pdev_path = libxl__strdup(NOGC, "");
-                    dst->format = LIBXL_DISK_FORMAT_EMPTY;
-                } else {
-                    /* 2 and 3, use JSON, no need to touch anything */
-                    ;
-                }
-            }
-        });
-
-#undef MERGE
-
-out:
-    if (lock) libxl__unlock_domain_userdata(lock);
-    CTX_UNLOCK;
-    GC_FREE;
-    return rc;
-}
 
 /*
  * Local variables:

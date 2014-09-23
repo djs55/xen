@@ -97,7 +97,9 @@ case "$command" in
         ;;
 esac
 
-handle_iptable
+if [ "$type_if" = vif ]; then
+    handle_iptable
+fi
 
 call_hooks vif post
 

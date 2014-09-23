@@ -38,9 +38,7 @@ struct cmd_spec cmd_table[] = {
     { "config-update",
       &main_config_update, 1, 1,
       "Update a running domain's saved configuration, used when rebuilding "
-      "the domain after reboot.\n"
-      "WARNING: xl now has better capability to manage domain configuration, "
-      "avoid using this command when possible",
+      "the domain after reboot",
       "<Domain> <ConfigFile> [options] [vars]",
       "-h                      Print this help.\n"
       "-f FILE, --defconfig=FILE\n                     Use the given configuration file.\n"
@@ -58,10 +56,7 @@ struct cmd_spec cmd_table[] = {
     { "destroy",
       &main_destroy, 0, 1,
       "Terminate a domain immediately",
-      "[options] <Domain>\n",
-      "-f                      Permit destroying domain 0, which will only succeed\n"
-      "                        when run from disaggregated toolstack domain with a\n"
-      "                        hardware domain distinct from domain 0."
+      "<Domain>",
     },
     { "shutdown",
       &main_shutdown, 0, 1,
@@ -220,7 +215,7 @@ struct cmd_spec cmd_table[] = {
     { "vcpu-pin",
       &main_vcpupin, 1, 1,
       "Set which CPUs a VCPU can use",
-      "<Domain> <VCPU|all> <Hard affinity|-|all> <Soft affinity|-|all>",
+      "<Domain> <VCPU|all> <CPUs|all>",
     },
     { "vcpu-set",
       &main_vcpuset, 0, 1,

@@ -228,9 +228,10 @@ int cond_read_bool(struct policydb *p, struct hashtab *h, void *fp)
     u32 len;
     int rc;
 
-    booldatum = xzalloc(struct cond_bool_datum);
+    booldatum = xmalloc(struct cond_bool_datum);
     if ( !booldatum )
         return -1;
+    memset(booldatum, 0, sizeof(struct cond_bool_datum));
 
     rc = next_entry(buf, fp, sizeof buf);
     if ( rc < 0 )
@@ -342,9 +343,10 @@ static int cond_insertf(struct avtab *a, struct avtab_key *k,
         goto err;
     }
 
-    list = xzalloc(struct cond_av_list);
+    list = xmalloc(struct cond_av_list);
     if ( !list )
         goto err;
+    memset(list, 0, sizeof(*list));
 
     list->node = node_ptr;
     if ( !data->head )
@@ -439,9 +441,12 @@ static int cond_read_node(struct policydb *p, struct cond_node *node, void *fp)
         if ( rc < 0 )
             goto err;
 
-        expr = xzalloc(struct cond_expr);
+        expr = xmalloc(struct cond_expr);
         if ( !expr )
+        {
             goto err;
+        }
+        memset(expr, 0, sizeof(struct cond_expr));
 
         expr->expr_type = le32_to_cpu(buf[0]);
         expr->bool = le32_to_cpu(buf[1]);
@@ -489,9 +494,10 @@ int cond_read_list(struct policydb *p, void *fp)
 
     for ( i = 0; i < len; i++ )
     {
-        node = xzalloc(struct cond_node);
+        node = xmalloc(struct cond_node);
         if ( !node )
             goto err;
+        memset(node, 0, sizeof(struct cond_node));
 
         if ( cond_read_node(p, node, fp) != 0 )
             goto err;

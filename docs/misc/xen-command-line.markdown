@@ -46,9 +46,8 @@ undefined.
 
 ### Size (`<size>`)
 
-A size parameter may be any integer, with a single size suffix
+A size parameter may be any integer, with a size suffix
 
-* `T` or `t`: TiB (2^40)
 * `G` or `g`: GiB (2^30)
 * `M` or `m`: MiB (2^20)
 * `K` or `k`: KiB (2^10)
@@ -111,27 +110,19 @@ Specify which ACPI MADT table to parse for APIC information, if more
 than one is present.
 
 ### acpi\_pstate\_strict
-> `= <boolean>`
-
-> Default: `false`
-
-Enforce checking that P-state transitions by the ACPI cpufreq driver
-actually result in the nominated frequency to be established. A warning
-message will be logged if that isn't the case.
+> `= <integer>`
 
 ### acpi\_skip\_timer\_override
 > `= <boolean>`
 
 Instruct Xen to ignore timer-interrupt override.
 
+Because responsibility for ACPI processing is shared between Xen and
+the domain 0 kernel this option is automatically propagated to the
+domain 0 command line
+
 ### acpi\_sleep
 > `= s3_bios | s3_mode`
-
-`s3_bios` instructs Xen to invoke video BIOS initialization during S3
-resume.
-
-`s3_mode` instructs Xen to set up the boot time (option `vga=`) video
-mode during S3 resume.
 
 ### allowsuperpage
 > `= <boolean>`
@@ -176,13 +167,10 @@ developers wishing Xen to fall back to older timing methods on newer hardware.
 ### ats
 > `= <boolean>`
 
-> Default: `false`
+> Default: `true`
 
-Permits Xen to set up and use PCI Address Translation Services.  This is a
-performance optimisation for PCI Passthrough.
-
-**WARNING: Xen cannot currently safely use ATS because of its synchronous wait
-loops for Queued Invalidation completions.**
+Permits Xen to set up and use PCI Address Translation Services, which
+is required for PCI Passthrough.
 
 ### availmem
 > `= <size>`
@@ -209,16 +197,6 @@ Scrub free RAM during boot.  This is a safety feature to prevent
 accidentally leaking sensitive VM data into other VMs if Xen crashes
 and reboots.
 
-### `bootscrub_chunk`
-> `= <size>`
-
-> Default: `128M`
-
-Maximum RAM block size chunks to be scrubbed whilst holding the page heap lock
-and not running softirqs. Reduce this if softirqs are not being run frequently
-enough. Setting this to a high value may cause boot failure, particularly if
-the NMI watchdog is also enabled.
-
 ### cachesize
 > `= <size>`
 
@@ -228,14 +206,6 @@ If set, override Xen's calculation of the level 2 cache line size.
 > `= pit | hpet | acpi`
 
 If set, override Xen's default choice for the platform timer.
-
-### cmos-rtc-probe
-> `= <boolean>`
-
-> Default: `false`
-
-Flag to indicate whether to probe for a CMOS Real Time Clock irrespective of
-ACPI indicating none to be there.
 
 ### com1,com2
 > `= <baud>[/<clock_hz>][,[DPS][,[<io-base>|pci|amt][,[<irq>][,[<port-bdf>][,[<bridge-bdf>]]]]]]`
@@ -305,22 +275,11 @@ cleared.  This allows a single port to be shared by two subsystems
 makes sense on its own.
 
 ### console\_timestamps
-> `= none | date | datems | boot`
+> `= <boolean>`
 
-> Default: `none`
+> Default: `false`
 
-Specify which timestamp format Xen should use for each console line.
-
-* `none`: No timestamps
-* `date`: Date and time information
-    * `[YYYY-MM-DD HH:MM:SS]`
-* `datems`: Date and time, with milliseconds
-    * `[YYYY-MM-DD HH:MM:SS.mmm]`
-* `boot`: Seconds and microseconds since boot
-    * `[SSSSSS.uuuuuu]`
-
-For compatibility with the older boolean parameter, specifying
-`console_timestamps` alone will enable the `date` option.
+Flag to indicate whether include a timestamp with each console line.
 
 ### console\_to\_ring
 > `= <boolean>`
@@ -352,55 +311,32 @@ If set, force use of the performance counters for oprofile, rather than detectin
 available support.
 
 ### cpufreq
-> `= dom0-kernel | none | xen[,[powersave|performance|ondemand|userspace][,<maxfreq>][,[<minfreq>][,[verbose]]]]`
+> `= dom0-kernel | none | xen`
 
 > Default: `xen`
 
 Indicate where the responsibility for driving power states lies.
 
-* Default governor policy is ondemand.
-* `<maxfreq>` and `<minfreq>` are integers which represent max and min processor frequencies
-  respectively.
-* `verbose` option can be included as a string or also as `verbose=<integer>`
-
 ### cpuid\_mask\_cpu (AMD only)
 > `= fam_0f_rev_c | fam_0f_rev_d | fam_0f_rev_e | fam_0f_rev_f | fam_0f_rev_g | fam_10_rev_b | fam_10_rev_c | fam_11_rev_b`
 
-If the other **cpuid\_mask\_{,ext\_,thermal\_,l7s0\_}e{a,b,c,d}x**
-options are fully set (unspecified on the command line), specify a
-pre-canned cpuid mask to mask the current processor down to appear as
-the specified processor. It is important to ensure that all hosts in a
-pool appear the same to guests to allow successful live migration.
+If the other **cpuid\_mask\_{,ext\_}e{c,d}x** options are fully set
+(unspecified on the command line), specify a pre-canned cpuid mask to
+mask the current processor down to appear as the specified processor.
+It is important to ensure that all hosts in a pool appear the same to
+guests to allow successful live migration.
 
-### cpuid\_mask\_{{,ext\_}ecx,edx}
+### cpuid\_mask\_ ecx,edx,ext\_ecx,ext\_edx,xsave_eax
 > `= <integer>`
 
 > Default: `~0` (all bits set)
 
-These four command line parameters are used to specify cpuid masks to
+These five command line parameters are used to specify cpuid masks to
 help with cpuid levelling across a pool of hosts.  Setting a bit in
 the mask indicates that the feature should be enabled, while clearing
 a bit in the mask indicates that the feature should be disabled.  It
 is important to ensure that all hosts in a pool appear the same to
 guests to allow successful live migration.
-
-### cpuid\_mask\_xsave\_eax (Intel only)
-> `= <integer>`
-
-> Default: `~0` (all bits set)
-
-This command line parameter is also used to specify a cpuid mask to
-help with cpuid levelling across a pool of hosts.  See the description
-of the other respective options above.
-
-### cpuid\_mask\_{l7s0\_{eax,ebx},thermal\_ecx} (AMD only)
-> `= <integer>`
-
-> Default: `~0` (all bits set)
-
-These three command line parameters are also used to specify cpuid
-masks to help with cpuid levelling across a pool of hosts.  See the
-description of the other respective options above.
 
 ### cpuidle
 > `= <boolean>`
@@ -529,13 +465,6 @@ Practices](http://wiki.xen.org/wiki/Xen_Best_Practices#Xen_dom0_dedicated_memory
 
 Pin dom0 vcpus to their respective pcpus
 
-### dom0pvh
-> `= <boolean>`
-
-> Default: `false`
-
-Flag that makes a 64bit dom0 boot in PVH mode. No 32bit support at present.
-
 ### e820-mtrr-clip
 > `= <boolean>`
 
@@ -587,22 +516,6 @@ versa.  For example to change dom0 without changing domU, use
 
 Specify the font size when using the VESA console driver.
 
-### force-ept (Intel)
-> `= <boolean>`
-
-> Default: `false`
-
-Allow EPT to be enabled when VMX feature VM\_ENTRY\_LOAD\_GUEST\_PAT is not
-present.
-
-*Warning:*
-Due to CVE-2013-2212, VMX feature VM\_ENTRY\_LOAD\_GUEST\_PAT is by default
-required as a prerequisite for using EPT.  If you are not using PCI Passthrough,
-or trust the guest administrator who would be using passthrough, then the
-requirement can be relaxed.  This option is particularly useful for nested
-virtualization, to allow the L1 hypervisor to use EPT even if the L0 hypervisor
-does not provide VM\_ENTRY\_LOAD\_GUEST\_PAT.
-
 ### gdb
 > `= <baud>[/<clock_hz>][,DPS[,<io-base>[,<irq>[,<port-bdf>[,<bridge-bdf>]]]] | pci | amt ] `
 
@@ -648,48 +561,14 @@ Paging (HAP).
 Flag to enable 2 MB host page table support for Hardware Assisted
 Paging (HAP).
 
-### hardware\_dom
-> `= <domid>`
-
-> Default: `0`
-
-Enable late hardware domain creation using the specified domain ID.  This is
-intended to be used when domain 0 is a stub domain which builds a disaggregated
-system including a hardware domain with the specified domain ID.  This option is
-supported only when compiled with XSM\_ENABLE=y on x86.
-
 ### hpetbroadcast
 > `= <boolean>`
 
 ### hvm\_debug
 > `= <integer>`
 
-The specified value is a bit mask with the individual bits having the
-following meaning:
-
-Bit  0 - debug level 0 (unused at present)
-Bit  1 - debug level 1 (Control Register logging)
-Bit  2 - debug level 2 (VMX logging of MSR restores when context switching)
-Bit  3 - debug level 3 (unused at present)
-Bit  4 - I/O operation logging
-Bit  5 - vMMU logging
-Bit  6 - vLAPIC general logging
-Bit  7 - vLAPIC timer logging
-Bit  8 - vLAPIC interrupt logging
-Bit  9 - vIOAPIC logging
-Bit 10 - hypercall logging
-Bit 11 - MSR operation logging
-
-Recognized in debug builds of the hypervisor only.
-
 ### hvm\_port80
 > `= <boolean>`
-
-> Default: `true`
-
-Specify whether guests are to be given access to physical port 80
-(often used for debugging purposes), to override the DMI based
-detection of systems known to misbehave upon accesses to that port.
 
 ### highmem-start
 > `= <size>`
@@ -701,105 +580,9 @@ debug hypervisor only).
 > `= <integer>`
 
 ### ioapic\_ack
-> `= old | new`
-
-> Default: `new` unless directed-EOI is supported
-
 ### iommu
-> `= List of [ <boolean> | force | required | intremap | qinval | snoop | sharept | dom0-passthrough | dom0-strict | amd-iommu-perdev-intremap | workaround_bios_bug | verbose | debug ]`
-
-> Sub-options:
-
-> `<boolean>`
-
-> Default: `on`
-
->> Control the use of IOMMU(s) in the system.
-
-> All other sub-options are of boolean kind and can be prefixed with `no-` to
-> effect the inverse meaning.
-
-> `force` or `required`
-
-> Default: `false`
-
->> Don't continue booting unless IOMMU support is found and can be initialized
->> successfully.
-
-> `intremap`
-
-> Default: `true`
-
->> Control the use of interrupt remapping (DMA remapping will always be enabled
->> if IOMMU functionality is enabled).
-
-> `qinval` (VT-d)
-
-> Default: `true`
-
->> Control the use of Queued Invalidation.
-
-> `snoop` (Intel)
-
-> Default: `true`
-
->> Control the use of Snoop Control.
-
-> `sharept`
-
-> Default: `true`
-
->> Control whether CPU and IOMMU page tables should be shared.
-
-> `dom0-passthrough`
-
-> Default: `false`
-
->> Control whether to disable DMA remapping for Dom0.
-
-> `dom0-strict`
-
-> Default: `false`
-
->> Control whether to set up DMA remapping only for the memory Dom0 actually
->> got assigned. Implies `no-dom0-passthrough`.
-
-> `amd-iommu-perdev-intremap`
-
-> Default: `true`
-
->> Control whether to set up interrupt remapping data structures per device
->> rather that once for the entire system. Turning this off is making PCI
->> device pass-through insecure and hence unsupported.
-
-> `workaround_bios_bug` (VT-d)
-
-> Default: `false`
-
->> Causes DRHD entries without any PCI discoverable devices under them to be
->> ignored (normally IOMMU setup fails if any of the devices listed by a DRHD
->> entry aren't PCI discoverable).
-
-> `verbose`
-
-> Default: `false`
-
->> Increase IOMMU code's verbosity.
-
-> `debug`
-
-> Default: `false`
-
->> Enable IOMMU debugging code (implies `verbose`).
-
-### iommu\_inclusive\_mapping (VT-d)
+### iommu\_inclusive\_mapping
 > `= <boolean>`
-
-> Default: `false`
-
-Use this to work around firmware issues providing correct RMRR entries. Rather
-than only mapping RAM pages for IOMMU accesses for Dom0, with this option all
-pages not marked as unusable in the E820 table will get a mapping established.
 
 ### irq\_ratelimit
 > `= <integer>`
@@ -820,10 +603,10 @@ Force the use of `[<seg>:]<bus>:<device>.<func>` as device ID of IO-APIC
 ACPI table.
 
 ### lapic
-> `= <boolean>`
 
 Force the use of use of the local APIC on a uniprocessor system, even
-if left disabled by the BIOS.
+if left disabled by the BIOS.  This option will accept any value at
+all.
 
 ### lapic\_timer\_c2\_ok
 > `= <boolean>`
@@ -859,9 +642,6 @@ with **crashinfo_maxaddr**.
 ### max\_gsi\_irqs
 > `= <integer>`
 
-Specifies the number of interrupts to be use for pin (IO-APIC or legacy PIC)
-based interrupts. Any higher IRQs will be available for use via PCI MSI.
-
 ### maxcpus
 > `= <integer>`
 
@@ -895,13 +675,6 @@ Specify if the MMConfig space should be enabled.
 > Default: `true`
 
 Force Xen to (not) use PCI-MSI, even if ACPI FADT says otherwise.
-
-### mtrr.show
-> `= <boolean>`
-
-> Default: `false`
-
-Print boot time MTRR state (x86 only).
 
 ### mwait-idle
 > `= <boolean>`
@@ -946,7 +719,7 @@ IRQ routing issues.
 > Default: `false`
 
 Ignore the local APIC on a uniprocessor system, even if enabled by the
-BIOS.
+BIOS.  This option will accept value.
 
 ### no-real-mode (x86)
 > `= <boolean>`
@@ -981,14 +754,6 @@ Defaults to booting secondary processors.
 
 Default: `on`
 
-### pci
-> `= {no-}serr | {no-}perr`
-
-Disable signaling of SERR (system errors) and/or PERR (parity errors)
-on all PCI devices.
-
-Default: Signaling left as set by firmware.
-
 ### pci-phantom
 > `=[<seg>:]<bus>:<device>,<stride>`
 
@@ -1006,7 +771,7 @@ This option can be specified more than once (up to 8 times at present).
 > `= <integer>`
 
 ### reboot
-> `= t[riple] | k[bd] | a[cpi] | p[ci] | n[o] [, [w]arm | [c]old]`
+> `= t[riple] | k[bd] | n[o] [, [w]arm | [c]old]`
 
 Default: `0`
 
@@ -1016,15 +781,11 @@ Specify the host reboot method.
 
 `cold` instructs Xen to set the cold reboot flag.
 
-`no` instructs Xen to not automatically reboot after panics or crashes.
-
 `triple` instructs Xen to reboot the host by causing a triple fault.
 
 `kbd` instructs Xen to reboot the host via the keyboard controller.
 
 `acpi` instructs Xen to reboot the host using RESET_REG in the ACPI FADT.
-
-`pci` instructs Xen to reboot the host using PCI reset register (port CF9).
 
 ### sched
 > `= credit | credit2 | sedf | arinc653`
@@ -1080,13 +841,6 @@ Set the serial transmit buffer size.
 > Default: `true`
 
 Flag to enable Supervisor Mode Execution Protection
-
-### smap
-> `= <boolean>`
-
-> Default: `true`
-
-Flag to enable Supervisor Mode Access Prevention
 
 ### snb\_igd\_quirk
 > `= <boolean>`
@@ -1248,14 +1002,12 @@ As the BTS virtualisation is not 100% safe and because of the nehalem quirk
 don't use the vpmu flag on production systems with Intel cpus!
 
 ### watchdog
-> `= force | <boolean>`
+> `= <boolean>`
 
 > Default: `false`
 
 Run an NMI watchdog on each processor.  If a processor is stuck for
-longer than the **watchdog\_timeout**, a panic occurs.  When `force` is
-specified, in addition to running an NMI watchdog on each processor,
-unknown NMIs will still be processed.
+longer than the **watchdog\_timeout**, a panic occurs.
 
 ### watchdog\_timeout
 > `= <integer>`

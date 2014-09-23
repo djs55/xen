@@ -19,6 +19,7 @@
 #include "xc_private.h"
 #include <unistd.h>
 #include <stdio.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -27,6 +28,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <sys/ioctl.h>
+#include <stdint.h>
 
 #define OCON_ISID    0    /* initial SIDs */
 #define OCON_PIRQ    1    /* physical irqs */

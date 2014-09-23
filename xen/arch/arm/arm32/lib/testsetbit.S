@@ -13,4 +13,6 @@
 #include "bitops.h"
                 .text
 
-testop	_test_and_set_bit, orreq, streq
+ENTRY(_test_and_set_bit)
+	testop	orreq, streq
+ENDPROC(_test_and_set_bit)

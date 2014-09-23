@@ -37,8 +37,6 @@
 
 #define CONFIG_VIDEO 1
 
-#define CONFIG_IRQ_HAS_MULTIPLE_ACTION 1
-
 #define OPT_CONSOLE_STR "dtuart"
 
 #ifdef MAX_PHYS_CPUS
@@ -193,6 +191,17 @@ extern unsigned long frametable_virt_end;
 
 #define watchdog_disable() ((void)0)
 #define watchdog_enable()  ((void)0)
+
+#ifdef __ASSEMBLY__
+/* Board-specific: regs base address for the GIC
+ * Theses constants are only intend to be used in assembly file
+ * because the DT is not yet parsed.
+ */
+#define GIC_DR_OFFSET 0x1000
+#define GIC_CR_OFFSET 0x2000
+#define GIC_HR_OFFSET 0x4000 /* Guess work http://lists.infradead.org/pipermail/linux-arm-kernel/2011-September/064219.html */
+#define GIC_VR_OFFSET 0x6000 /* Virtual Machine CPU interface) */
+#endif /* __ASSEMBLY__ */
 
 #endif /* __ARM_CONFIG_H__ */
 /*

@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
-#include <sys/types.h>
 #include "xenstore_lib.h"
 #include "tdb.h"
 #include "talloc.h"

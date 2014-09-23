@@ -41,17 +41,21 @@ static char payload[XENSTORE_PAYLOAD_MAX + 1];  /* Unmarshalling area */
  * Call once, before any other xenbus actions. */
 void xenbus_setup(void)
 {
-    uint64_t val;
+    xen_hvm_param_t param;
 
     /* Ask Xen where the xenbus shared page is. */
-    if ( hvm_param_get(HVM_PARAM_STORE_PFN, &val) )
+    param.domid = DOMID_SELF;
+    param.index = HVM_PARAM_STORE_PFN;
+    if ( hypercall_hvm_op(HVMOP_get_param, &param) )
         BUG();
-    rings = (void *) (unsigned long) (val << PAGE_SHIFT);
+    rings = (void *) (unsigned long) (param.value << PAGE_SHIFT);
 
     /* Ask Xen where the xenbus event channel is. */
-    if ( hvm_param_get(HVM_PARAM_STORE_EVTCHN, &val) )
+    param.domid = DOMID_SELF;
+    param.index = HVM_PARAM_STORE_EVTCHN;
+    if ( hypercall_hvm_op(HVMOP_get_param, &param) )
         BUG();
-    event = val;
+    event = param.value;
 
     printf("Xenbus rings @0x%lx, event channel %lu\n",
            (unsigned long) rings, (unsigned long) event);

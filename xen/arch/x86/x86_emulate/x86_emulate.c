@@ -720,26 +720,29 @@ do{ uint8_t stub[] = { _bytes, 0xc3 };                                  \
     put_fpu(&fic);                                                      \
 } while (0)
 
-static unsigned long _get_rep_prefix(
-    const struct cpu_user_regs *int_regs,
+static unsigned long __get_rep_prefix(
+    struct cpu_user_regs *int_regs,
+    struct cpu_user_regs *ext_regs,
     int ad_bytes)
 {
-    return (ad_bytes == 2) ? (uint16_t)int_regs->ecx :
-           (ad_bytes == 4) ? (uint32_t)int_regs->ecx :
-           int_regs->ecx;
+    unsigned long ecx = ((ad_bytes == 2) ? (uint16_t)int_regs->ecx :
+                         (ad_bytes == 4) ? (uint32_t)int_regs->ecx :
+                         int_regs->ecx);
+
+    /* Skip the instruction if no repetitions are required. */
+    if ( ecx == 0 )
+        ext_regs->eip = int_regs->eip;
+
+    return ecx;
 }
 
 #define get_rep_prefix() ({                                             \
     unsigned long max_reps = 1;                                         \
     if ( rep_prefix() )                                                 \
-        max_reps = _get_rep_prefix(&_regs, ad_bytes);                   \
+        max_reps = __get_rep_prefix(&_regs, ctxt->regs, ad_bytes);      \
     if ( max_reps == 0 )                                                \
-    {                                                                   \
-        /* Skip the instruction if no repetitions are required. */      \
-        dst.type = OP_NONE;                                             \
-        goto writeback;                                                 \
-    }                                                                   \
-    max_reps;                                                           \
+        goto done;                                                      \
+   max_reps;                                                            \
 })
 
 static void __put_rep_prefix(
@@ -3918,8 +3921,7 @@ x86_emulate(
         if ( !rc && (b & 1) && (ea.type == OP_MEM) )
             rc = ops->write(ea.mem.seg, ea.mem.off, mmvalp,
                             ea.bytes, ctxt);
-        dst.type = OP_NONE;
-        break;
+        goto done;
     }
 
     case 0x20: /* mov cr,reg */
@@ -4186,8 +4188,7 @@ x86_emulate(
         if ( !rc && (b != 0x6f) && (ea.type == OP_MEM) )
             rc = ops->write(ea.mem.seg, ea.mem.off, mmvalp,
                             ea.bytes, ctxt);
-        dst.type = OP_NONE;
-        break;
+        goto done;
     }
 
     case 0x80 ... 0x8f: /* jcc (near) */ {

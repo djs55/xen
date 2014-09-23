@@ -1,7 +1,7 @@
 XEN_ROOT=$(CURDIR)/../../..
 include $(XEN_ROOT)/tools/Rules.mk
 
-CFLAGS += -Werror
+CFLAGS += -Wall -g -Werror
 CFLAGS += $(CFLAGS_libxenctrl)
 
 TESTDIR  = testsuite/tmp

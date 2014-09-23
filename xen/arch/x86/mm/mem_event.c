@@ -449,7 +449,7 @@ int do_mem_event_op(int op, uint32_t domain, void *arg)
     if ( ret )
         return ret;
 
-    ret = xsm_mem_event_op(XSM_DM_PRIV, d, op);
+    ret = xsm_mem_event_op(XSM_TARGET, d, op);
     if ( ret )
         goto out;
 
@@ -457,6 +457,9 @@ int do_mem_event_op(int op, uint32_t domain, void *arg)
     {
         case XENMEM_paging_op:
             ret = mem_paging_memop(d, (xen_mem_event_op_t *) arg);
+            break;
+        case XENMEM_access_op:
+            ret = mem_access_memop(d, (xen_mem_event_op_t *) arg);
             break;
         case XENMEM_sharing_op:
             ret = mem_sharing_memop(d, (xen_mem_sharing_op_t *) arg);
@@ -538,12 +541,6 @@ int mem_event_domctl(struct domain *d, xen_domctl_mem_event_op_t *mec,
         case XEN_DOMCTL_MEM_EVENT_OP_PAGING_ENABLE:
         {
             struct p2m_domain *p2m = p2m_get_hostp2m(d);
-
-            rc = -EOPNOTSUPP;
-            /* pvh fixme: p2m_is_foreign types need addressing */
-            if ( is_pvh_vcpu(current) || is_pvh_domain(hardware_domain) )
-                break;
-
             rc = -ENODEV;
             /* Only HAP is supported */
             if ( !hap_enabled(d) )
@@ -587,7 +584,6 @@ int mem_event_domctl(struct domain *d, xen_domctl_mem_event_op_t *mec,
         switch( mec->op )
         {
         case XEN_DOMCTL_MEM_EVENT_OP_ACCESS_ENABLE:
-        case XEN_DOMCTL_MEM_EVENT_OP_ACCESS_ENABLE_INTROSPECTION:
         {
             rc = -ENODEV;
             /* Only HAP is supported */
@@ -601,23 +597,13 @@ int mem_event_domctl(struct domain *d, xen_domctl_mem_event_op_t *mec,
             rc = mem_event_enable(d, mec, med, _VPF_mem_access, 
                                     HVM_PARAM_ACCESS_RING_PFN,
                                     mem_access_notification);
-
-            if ( mec->op != XEN_DOMCTL_MEM_EVENT_OP_ACCESS_ENABLE &&
-                 rc == 0 && hvm_funcs.enable_msr_exit_interception )
-            {
-                d->arch.hvm_domain.introspection_enabled = 1;
-                hvm_funcs.enable_msr_exit_interception(d);
-            }
         }
         break;
 
         case XEN_DOMCTL_MEM_EVENT_OP_ACCESS_DISABLE:
         {
             if ( med->ring_page )
-            {
                 rc = mem_event_disable(d, med);
-                d->arch.hvm_domain.introspection_enabled = 0;
-            }
         }
         break;
 
@@ -637,11 +623,6 @@ int mem_event_domctl(struct domain *d, xen_domctl_mem_event_op_t *mec,
         {
         case XEN_DOMCTL_MEM_EVENT_OP_SHARING_ENABLE:
         {
-            rc = -EOPNOTSUPP;
-            /* pvh fixme: p2m_is_foreign types need addressing */
-            if ( is_pvh_vcpu(current) || is_pvh_domain(hardware_domain) )
-                break;
-
             rc = -ENODEV;
             /* Only HAP is supported */
             if ( !hap_enabled(d) )
@@ -674,37 +655,6 @@ int mem_event_domctl(struct domain *d, xen_domctl_mem_event_op_t *mec,
     return rc;
 }
 
-void mem_event_vcpu_pause(struct vcpu *v)
-{
-    ASSERT(v == current);
-
-    atomic_inc(&v->mem_event_pause_count);
-    vcpu_pause_nosync(v);
-}
-
-void mem_event_vcpu_unpause(struct vcpu *v)
-{
-    int old, new, prev = v->mem_event_pause_count.counter;
-
-    /* All unpause requests as a result of toolstack responses.  Prevent
-     * underflow of the vcpu pause count. */
-    do
-    {
-        old = prev;
-        new = old - 1;
-
-        if ( new < 0 )
-        {
-            printk(XENLOG_G_WARNING
-                   "%pv mem_event: Too many unpause attempts\n", v);
-            return;
-        }
-
-        prev = cmpxchg(&v->mem_event_pause_count.counter, old, new);
-    } while ( prev != old );
-
-    vcpu_unpause(v);
-}
 
 /*
  * Local variables:

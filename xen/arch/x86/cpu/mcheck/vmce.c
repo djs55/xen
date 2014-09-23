@@ -82,9 +82,10 @@ int vmce_restore_vcpu(struct vcpu *v, const struct hvm_vmce_vcpu *ctxt)
     if ( ctxt->caps & ~guest_mcg_cap & ~MCG_CAP_COUNT & ~MCG_CTL_P )
     {
         dprintk(XENLOG_G_ERR, "%s restore: unsupported MCA capabilities"
-                " %#" PRIx64 " for %pv (supported: %#Lx)\n",
+                " %#" PRIx64 " for d%d:v%u (supported: %#Lx)\n",
                 has_hvm_container_vcpu(v) ? "HVM" : "PV", ctxt->caps,
-                v, guest_mcg_cap & ~MCG_CAP_COUNT);
+                v->domain->domain_id, v->vcpu_id,
+                guest_mcg_cap & ~MCG_CAP_COUNT);
         return -EPERM;
     }
 
@@ -106,7 +107,7 @@ static int bank_mce_rdmsr(const struct vcpu *v, uint32_t msr, uint64_t *val)
 
     *val = 0;
 
-    switch ( msr & (-MSR_IA32_MC0_CTL | 3) )
+    switch ( msr & (MSR_IA32_MC0_CTL | 3) )
     {
     case MSR_IA32_MC0_CTL:
         /* stick all 1's to MCi_CTL */
@@ -209,7 +210,7 @@ static int bank_mce_wrmsr(struct vcpu *v, uint32_t msr, uint64_t val)
     int ret = 1;
     unsigned int bank = (msr - MSR_IA32_MC0_CTL) / 4;
 
-    switch ( msr & (-MSR_IA32_MC0_CTL | 3) )
+    switch ( msr & (MSR_IA32_MC0_CTL | 3) )
     {
     case MSR_IA32_MC0_CTL:
         /*
@@ -356,21 +357,19 @@ int inject_vmce(struct domain *d, int vcpu)
         if ( vcpu != VMCE_INJECT_BROADCAST && vcpu != v->vcpu_id )
             continue;
 
-        /* Don't inject to uninitialized VCPU. */
-        if ( !v->is_initialised )
-            continue;
-
         if ( (has_hvm_container_domain(d) ||
               guest_has_trap_callback(d, v->vcpu_id, TRAP_machine_check)) &&
              !test_and_set_bool(v->mce_pending) )
         {
-            mce_printk(MCE_VERBOSE, "MCE: inject vMCE to %pv\n", v);
+            mce_printk(MCE_VERBOSE, "MCE: inject vMCE to d%d:v%d\n",
+                       d->domain_id, v->vcpu_id);
             vcpu_kick(v);
             ret = 0;
         }
         else
         {
-            mce_printk(MCE_QUIET, "Failed to inject vMCE to %pv\n", v);
+            mce_printk(MCE_QUIET, "Failed to inject vMCE to d%d:v%d\n",
+                       d->domain_id, v->vcpu_id);
             ret = -EBUSY;
             break;
         }
@@ -434,7 +433,7 @@ int unmmap_broken_page(struct domain *d, mfn_t mfn, unsigned long gfn)
     int rc;
 
     /* Always trust dom0's MCE handler will prevent future access */
-    if ( is_hardware_domain(d) )
+    if ( d == dom0 )
         return 0;
 
     if (!mfn_valid(mfn_x(mfn)))
@@ -448,7 +447,8 @@ int unmmap_broken_page(struct domain *d, mfn_t mfn, unsigned long gfn)
     if ( p2m_to_mask(pt) & P2M_UNMAP_TYPES)
     {
         ASSERT(mfn_x(r_mfn) == mfn_x(mfn));
-        rc = p2m_change_type_one(d, gfn, pt, p2m_ram_broken);
+        p2m_change_type(d, gfn, pt, p2m_ram_broken);
+        rc = 0;
     }
     put_gfn(d, gfn);
 

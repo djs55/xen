@@ -270,7 +270,7 @@ void hvm_set_pci_link_route(struct domain *d, u8 link, u8 isa_irq)
             d->domain_id, link, old_isa_irq, isa_irq);
 }
 
-int hvm_inject_msi(struct domain *d, uint64_t addr, uint32_t data)
+void hvm_inject_msi(struct domain *d, uint64_t addr, uint32_t data)
 {
     uint32_t tmp = (uint32_t) addr;
     uint8_t  dest = (tmp & MSI_ADDR_DEST_ID_MASK) >> MSI_ADDR_DEST_ID_SHIFT;
@@ -283,35 +283,30 @@ int hvm_inject_msi(struct domain *d, uint64_t addr, uint32_t data)
 
     if ( !vector )
     {
-        int pirq = ((addr >> 32) & 0xffffff00) | dest;
-
+        int pirq = ((addr >> 32) & 0xffffff00) | ((addr >> 12) & 0xff);
         if ( pirq > 0 )
         {
             struct pirq *info = pirq_info(d, pirq);
 
             /* if it is the first time, allocate the pirq */
-            if ( !info || info->arch.hvm.emuirq == IRQ_UNBOUND )
+            if (info->arch.hvm.emuirq == IRQ_UNBOUND)
             {
-                int rc;
-
                 spin_lock(&d->event_lock);
-                rc = map_domain_emuirq_pirq(d, pirq, IRQ_MSI_EMU);
+                map_domain_emuirq_pirq(d, pirq, IRQ_MSI_EMU);
                 spin_unlock(&d->event_lock);
-                if ( rc )
-                    return rc;
-                info = pirq_info(d, pirq);
-                if ( !info )
-                    return -EBUSY;
+            } else if (info->arch.hvm.emuirq != IRQ_MSI_EMU)
+            {
+                printk("%s: pirq %d does not correspond to an emulated MSI\n", __func__, pirq);
+                return;
             }
-            else if ( info->arch.hvm.emuirq != IRQ_MSI_EMU )
-                return -EINVAL;
             send_guest_pirq(d, info);
-            return 0;
+            return;
+        } else {
+            printk("%s: error getting pirq from MSI: pirq = %d\n", __func__, pirq);
         }
-        return -ERANGE;
     }
 
-    return vmsi_deliver(d, vector, dest, dest_mode, delivery_mode, trig_mode);
+    vmsi_deliver(d, vector, dest, dest_mode, delivery_mode, trig_mode);
 }
 
 void hvm_set_callback_via(struct domain *d, uint64_t via)
@@ -466,12 +461,6 @@ int hvm_local_events_need_delivery(struct vcpu *v)
         return 0;
 
     return !hvm_interrupt_blocked(v, intack);
-}
-
-void arch_evtchn_inject(struct vcpu *v)
-{
-    if ( has_hvm_container_vcpu(v) )
-        hvm_assert_evtchn_irq(v);
 }
 
 static void irq_dump(struct domain *d)

@@ -70,11 +70,10 @@ static void __init mce_set_verbosity(char *str)
 custom_param("mce_verbosity", mce_set_verbosity);
 
 /* Handle unconfigured int18 (should never happen) */
-static void unexpected_machine_check(const struct cpu_user_regs *regs)
+static void unexpected_machine_check(struct cpu_user_regs *regs, long error_code)
 {
-    console_force_unlock();
-    printk("Unexpected Machine Check Exception\n");
-    fatal_trap(regs);
+    printk(XENLOG_ERR "CPU#%d: Unexpected int18 (Machine Check).\n",
+           smp_processor_id());
 }
 
 
@@ -88,9 +87,9 @@ void x86_mce_vector_register(x86_mce_vector_t hdlr)
 
 /* Call the installed machine check handler for this CPU setup. */
 
-void do_machine_check(const struct cpu_user_regs *regs)
+void machine_check_vector(struct cpu_user_regs *regs, long error_code)
 {
-    _machine_check_vector(regs);
+    _machine_check_vector(regs, error_code);
 }
 
 /* Init machine check callback handler
@@ -424,7 +423,7 @@ static void mce_spin_unlock(spinlock_t *lk)
       spin_unlock(lk);
 }
 
-static enum mce_result mce_action(const struct cpu_user_regs *regs,
+static enum mce_result mce_action(struct cpu_user_regs *regs,
     mctelem_cookie_t mctc);
 
 /*
@@ -432,7 +431,7 @@ static enum mce_result mce_action(const struct cpu_user_regs *regs,
  * -1: if system can't be recovered
  * 0: Continue to next step
  */
-static int mce_urgent_action(const struct cpu_user_regs *regs,
+static int mce_urgent_action(struct cpu_user_regs *regs,
                               mctelem_cookie_t mctc)
 {
     uint64_t gstatus;
@@ -459,10 +458,9 @@ static int mce_urgent_action(const struct cpu_user_regs *regs,
 }
 
 /* Shared #MC handler. */
-void mcheck_cmn_handler(const struct cpu_user_regs *regs)
+void mcheck_cmn_handler(struct cpu_user_regs *regs, long error_code,
+    struct mca_banks *bankmask, struct mca_banks *clear_bank)
 {
-    struct mca_banks *bankmask = mca_allbanks;
-    struct mca_banks *clear_bank = __get_cpu_var(mce_clear_banks);
     uint64_t gstatus;
     mctelem_cookie_t mctc = NULL;
     struct mca_summary bs;
@@ -731,10 +729,8 @@ void mcheck_init(struct cpuinfo_x86 *c, bool_t bsp)
 {
     enum mcheck_type inited = mcheck_none;
 
-    if ( mce_disabled )
-    {
-        if ( bsp )
-            printk(XENLOG_INFO "MCE support disabled by bootparam\n");
+    if (mce_disabled == 1) {
+        dprintk(XENLOG_INFO, "MCE support disabled by bootparam\n");
         return;
     }
 
@@ -777,15 +773,13 @@ void mcheck_init(struct cpuinfo_x86 *c, bool_t bsp)
 
     intpose_init();
 
-    if ( bsp )
-    {
-        mctelem_init(sizeof(struct mc_info));
-        register_cpu_notifier(&cpu_nfb);
-    }
+    mctelem_init(sizeof(struct mc_info));
 
     /* Turn on MCE now */
     set_in_cr4(X86_CR4_MCE);
 
+    if ( bsp )
+        register_cpu_notifier(&cpu_nfb);
     set_poll_bankmask(c);
 
     return;
@@ -1571,7 +1565,7 @@ void mc_panic(char *s)
  */
 
 /* Maybe called in MCE context, no lock, no printk */
-static enum mce_result mce_action(const struct cpu_user_regs *regs,
+static enum mce_result mce_action(struct cpu_user_regs *regs,
                       mctelem_cookie_t mctc)
 {
     struct mc_info *local_mi;

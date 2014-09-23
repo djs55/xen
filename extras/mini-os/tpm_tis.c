@@ -26,7 +26,6 @@
 #include <mini-os/events.h>
 #include <mini-os/wait.h>
 #include <mini-os/xmalloc.h>
-#include <mini-os/lib.h>
 #include <errno.h>
 #include <stdbool.h>
 
@@ -612,7 +611,7 @@ s_time_t tpm_calc_ordinal_duration(struct tpm_chip *chip,
 
 
 static int locality_enabled(struct tpm_chip* tpm, int l) {
-   return l >= 0 && tpm->enabled_localities & (1 << l);
+   return tpm->enabled_localities & (1 << l);
 }
 
 static int check_locality(struct tpm_chip* tpm, int l) {

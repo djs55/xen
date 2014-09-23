@@ -37,6 +37,7 @@
 #include <public/memory.h>
 #include <xen/sched.h>
 #include <xen/vmap.h>
+#include <asm/early_printk.h>
 #include <xsm/xsm.h>
 #include <xen/pfn.h>
 
@@ -47,9 +48,8 @@ struct domain *dom_xen, *dom_io, *dom_cow;
  * to the CPUs own pagetables.
  *
  * These pagetables have a very simple structure. They include:
- *  - 2MB worth of 4K mappings of xen at XEN_VIRT_START, boot_first and
- *    boot_second are used to populate the tables down to boot_third
- *    which contains the actual mapping.
+ *  - a 2MB mapping of xen at XEN_VIRT_START, boot_first and
+ *    boot_second are used to populate the trie down to that mapping.
  *  - a 1:1 mapping of xen at its current physical address. This uses a
  *    section mapping at whichever of boot_{pgtable,first,second}
  *    covers that physical address.
@@ -68,10 +68,8 @@ struct domain *dom_xen, *dom_io, *dom_cow;
 lpae_t boot_pgtable[LPAE_ENTRIES] __attribute__((__aligned__(4096)));
 #ifdef CONFIG_ARM_64
 lpae_t boot_first[LPAE_ENTRIES] __attribute__((__aligned__(4096)));
-lpae_t boot_first_id[LPAE_ENTRIES] __attribute__((__aligned__(4096)));
 #endif
 lpae_t boot_second[LPAE_ENTRIES]  __attribute__((__aligned__(4096)));
-lpae_t boot_third[LPAE_ENTRIES]  __attribute__((__aligned__(4096)));
 
 /* Main runtime page tables */
 
@@ -214,8 +212,9 @@ void dump_hyp_walk(vaddr_t addr)
 /* Map a 4k page in a fixmap entry */
 void set_fixmap(unsigned map, unsigned long mfn, unsigned attributes)
 {
-    lpae_t pte = mfn_to_xen_entry(mfn, attributes);
+    lpae_t pte = mfn_to_xen_entry(mfn);
     pte.pt.table = 1; /* 4k mappings always have this bit set */
+    pte.pt.ai = attributes;
     pte.pt.xn = 1;
     write_pte(xen_fixmap + third_table_offset(FIXMAP_ADDR(map)), pte);
     flush_xen_data_tlb_range_va(FIXMAP_ADDR(map), PAGE_SIZE);
@@ -271,7 +270,7 @@ void *map_domain_page(unsigned long mfn)
         else if ( map[slot].pt.avail == 0 )
         {
             /* Commandeer this 2MB slot */
-            pte = mfn_to_xen_entry(slot_mfn, WRITEALLOC);
+            pte = mfn_to_xen_entry(slot_mfn);
             pte.pt.avail = 1;
             write_pte(map + slot, pte);
             break;
@@ -304,7 +303,7 @@ void *map_domain_page(unsigned long mfn)
      * We may not have flushed this specific subpage at map time,
      * since we only flush the 4k page not the superpage
      */
-    flush_xen_data_tlb_range_va_local(va, PAGE_SIZE);
+    flush_xen_data_tlb_range_va(va, PAGE_SIZE);
 
     return (void *)va;
 }
@@ -345,9 +344,13 @@ unsigned long domain_page_map_to_mfn(const void *ptr)
 
 void flush_page_to_ram(unsigned long mfn)
 {
-    void *v = map_domain_page(mfn);
+    void *p, *v = map_domain_page(mfn);
 
-    clean_and_invalidate_xen_dcache_va_range(v, PAGE_SIZE);
+    dsb();           /* So the CPU issues all writes to the range */
+    for ( p = v; p < v + PAGE_SIZE ; p += cacheline_bytes )
+        asm volatile (__clean_and_invalidate_xen_dcache_one(0) : : "r" (p));
+    dsb();           /* So we know the flushes happen before continuing */
+
     unmap_domain_page(v);
 }
 
@@ -380,17 +383,16 @@ void __init arch_init_memory(void)
 void __cpuinit setup_virt_paging(void)
 {
     /* Setup Stage 2 address translation */
-    /* SH0=11 (Inner-shareable)
-     * ORGN0=IRGN0=01 (Normal memory, Write-Back Write-Allocate Cacheable)
+    /* SH0=00, ORGN0=IRGN0=01
      * SL0=01 (Level-1)
      * ARVv7: T0SZ=(1)1000 = -8 (32-(-8) = 40 bit physical addresses)
      * ARMv8: T0SZ=01 1000 = 24 (64-24   = 40 bit physical addresses)
      *        PS=010 == 40 bits
      */
 #ifdef CONFIG_ARM_32
-    WRITE_SYSREG32(0x80003558, VTCR_EL2);
+    WRITE_SYSREG32(0x80002558, VTCR_EL2);
 #else
-    WRITE_SYSREG32(0x80023558, VTCR_EL2);
+    WRITE_SYSREG32(0x80022558, VTCR_EL2);
 #endif
     isb();
 }
@@ -399,7 +401,7 @@ static inline lpae_t pte_of_xenaddr(vaddr_t va)
 {
     paddr_t ma = va + phys_offset;
     unsigned long mfn = ma >> PAGE_SHIFT;
-    return mfn_to_xen_entry(mfn, WRITEALLOC);
+    return mfn_to_xen_entry(mfn);
 }
 
 void __init remove_early_mappings(void)
@@ -419,12 +421,6 @@ void __init setup_pagetables(unsigned long boot_phys_offset, paddr_t xen_paddr)
     unsigned long dest_va;
     lpae_t pte, *p;
     int i;
-
-    /* Map the destination in the boot misc area. */
-    dest_va = BOOT_RELOC_VIRT_START;
-    pte = mfn_to_xen_entry(xen_paddr >> PAGE_SHIFT, WRITEALLOC);
-    write_pte(xen_second + second_table_offset(dest_va), pte);
-    flush_xen_data_tlb_range_va_local(dest_va, SECOND_SIZE);
 
     /* Calculate virt-to-phys offset for the new location */
     phys_offset = xen_paddr - (unsigned long) _start;
@@ -459,7 +455,7 @@ void __init setup_pagetables(unsigned long boot_phys_offset, paddr_t xen_paddr)
     /* Initialise xen second level entries ... */
     /* ... Xen's text etc */
 
-    pte = mfn_to_xen_entry(xen_paddr>>PAGE_SHIFT, WRITEALLOC);
+    pte = mfn_to_xen_entry(xen_paddr>>PAGE_SHIFT);
     pte.pt.xn = 0;/* Contains our text mapping! */
     xen_second[second_table_offset(XEN_VIRT_START)] = pte;
 
@@ -474,9 +470,9 @@ void __init setup_pagetables(unsigned long boot_phys_offset, paddr_t xen_paddr)
 
     /* Map the destination in the boot misc area. */
     dest_va = BOOT_RELOC_VIRT_START;
-    pte = mfn_to_xen_entry(xen_paddr >> PAGE_SHIFT, WRITEALLOC);
+    pte = mfn_to_xen_entry(xen_paddr >> PAGE_SHIFT);
     write_pte(boot_second + second_table_offset(dest_va), pte);
-    flush_xen_data_tlb_range_va_local(dest_va, SECOND_SIZE);
+    flush_xen_data_tlb_range_va(dest_va, SECOND_SIZE);
 #ifdef CONFIG_ARM_64
     ttbr = (uintptr_t) xen_pgtable + phys_offset;
 #else
@@ -488,17 +484,13 @@ void __init setup_pagetables(unsigned long boot_phys_offset, paddr_t xen_paddr)
     /* Clear the copy of the boot pagetables. Each secondary CPU
      * rebuilds these itself (see head.S) */
     memset(boot_pgtable, 0x0, PAGE_SIZE);
-    clean_and_invalidate_xen_dcache(boot_pgtable);
+    clean_xen_dcache(boot_pgtable);
 #ifdef CONFIG_ARM_64
     memset(boot_first, 0x0, PAGE_SIZE);
-    clean_and_invalidate_xen_dcache(boot_first);
-    memset(boot_first_id, 0x0, PAGE_SIZE);
-    clean_and_invalidate_xen_dcache(boot_first_id);
+    clean_xen_dcache(boot_first);
 #endif
     memset(boot_second, 0x0, PAGE_SIZE);
-    clean_and_invalidate_xen_dcache(boot_second);
-    memset(boot_third, 0x0, PAGE_SIZE);
-    clean_and_invalidate_xen_dcache(boot_third);
+    clean_xen_dcache(boot_second);
 
     /* Break up the Xen mapping into 4k pages and protect them separately. */
     for ( i = 0; i < LPAE_ENTRIES; i++ )
@@ -507,7 +499,7 @@ void __init setup_pagetables(unsigned long boot_phys_offset, paddr_t xen_paddr)
         unsigned long va = XEN_VIRT_START + (i << PAGE_SHIFT);
         if ( !is_kernel(va) )
             break;
-        pte = mfn_to_xen_entry(mfn, WRITEALLOC);
+        pte = mfn_to_xen_entry(mfn);
         pte.pt.table = 1; /* 4k mappings always have this bit set */
         if ( is_kernel_text(va) || is_kernel_inittext(va) )
         {
@@ -528,7 +520,7 @@ void __init setup_pagetables(unsigned long boot_phys_offset, paddr_t xen_paddr)
     /* From now on, no mapping may be both writable and executable. */
     WRITE_SYSREG32(READ_SYSREG32(SCTLR_EL2) | SCTLR_WXN, SCTLR_EL2);
     /* Flush everything after setting WXN bit. */
-    flush_xen_text_tlb_local();
+    flush_xen_text_tlb();
 
 #ifdef CONFIG_ARM_32
     per_cpu(xen_pgtable, 0) = cpu0_pgtable;
@@ -577,7 +569,7 @@ int init_secondary_pagetables(int cpu)
      * domheap mapping pages. */
     for ( i = 0; i < DOMHEAP_SECOND_PAGES; i++ )
     {
-        pte = mfn_to_xen_entry(virt_to_mfn(domheap+i*LPAE_ENTRIES), WRITEALLOC);
+        pte = mfn_to_xen_entry(virt_to_mfn(domheap+i*LPAE_ENTRIES));
         pte.pt.table = 1;
         write_pte(&first[first_table_offset(DOMHEAP_VIRT_START+i*FIRST_SIZE)], pte);
     }
@@ -601,7 +593,7 @@ void __cpuinit mmu_init_secondary_cpu(void)
 {
     /* From now on, no mapping may be both writable and executable. */
     WRITE_SYSREG32(READ_SYSREG32(SCTLR_EL2) | SCTLR_WXN, SCTLR_EL2);
-    flush_xen_text_tlb_local();
+    flush_xen_text_tlb();
 }
 
 /* Create Xen's mappings of memory.
@@ -622,14 +614,14 @@ static void __init create_32mb_mappings(lpae_t *second,
 
     count = nr_mfns / LPAE_ENTRIES;
     p = second + second_linear_offset(virt_offset);
-    pte = mfn_to_xen_entry(base_mfn, WRITEALLOC);
+    pte = mfn_to_xen_entry(base_mfn);
     pte.pt.contig = 1;  /* These maps are in 16-entry contiguous chunks. */
     for ( i = 0; i < count; i++ )
     {
         write_pte(p + i, pte);
         pte.pt.base += 1 << LPAE_SHIFT;
     }
-    flush_xen_data_tlb_local();
+    flush_xen_data_tlb();
 }
 
 #ifdef CONFIG_ARM_32
@@ -657,8 +649,8 @@ void __init setup_xenheap_mappings(unsigned long base_mfn,
         xenheap_mfn_start = base_mfn;
 
     if ( base_mfn < xenheap_mfn_start )
-        panic("cannot add xenheap mapping at %lx below heap start %lx",
-              base_mfn, xenheap_mfn_start);
+        early_panic("cannot add xenheap mapping at %lx below heap start %lx",
+                    base_mfn, xenheap_mfn_start);
 
     end_mfn = base_mfn + nr_mfns;
 
@@ -694,13 +686,13 @@ void __init setup_xenheap_mappings(unsigned long base_mfn,
         else
         {
             unsigned long first_mfn = alloc_boot_pages(1, 1);
-            pte = mfn_to_xen_entry(first_mfn, WRITEALLOC);
+            pte = mfn_to_xen_entry(first_mfn);
             pte.pt.table = 1;
             write_pte(p, pte);
             first = mfn_to_virt(first_mfn);
         }
 
-        pte = mfn_to_xen_entry(base_mfn, WRITEALLOC);
+        pte = mfn_to_xen_entry(base_mfn);
         /* TODO: Set pte.pt.contig when appropriate. */
         write_pte(&first[first_table_offset(vaddr)], pte);
 
@@ -708,7 +700,7 @@ void __init setup_xenheap_mappings(unsigned long base_mfn,
         vaddr += FIRST_SIZE;
     }
 
-    flush_xen_data_tlb_local();
+    flush_xen_data_tlb();
 }
 #endif
 
@@ -736,7 +728,7 @@ void __init setup_frametable_mappings(paddr_t ps, paddr_t pe)
     second = mfn_to_virt(second_base);
     for ( i = 0; i < nr_second; i++ )
     {
-        pte = mfn_to_xen_entry(second_base + i, WRITEALLOC);
+        pte = mfn_to_xen_entry(second_base + i);
         pte.pt.table = 1;
         write_pte(&xen_first[first_table_offset(FRAMETABLE_VIRT_START)+i], pte);
     }
@@ -788,7 +780,7 @@ static int create_xen_table(lpae_t *entry)
     if ( p == NULL )
         return -ENOMEM;
     clear_page(p);
-    pte = mfn_to_xen_entry(virt_to_mfn(p), WRITEALLOC);
+    pte = mfn_to_xen_entry(virt_to_mfn(p));
     pte.pt.table = 1;
     write_pte(entry, pte);
     return 0;
@@ -834,8 +826,9 @@ static int create_xen_entries(enum xenmap_operation op,
                            addr, mfn);
                     return -EINVAL;
                 }
-                pte = mfn_to_xen_entry(mfn, ai);
+                pte = mfn_to_xen_entry(mfn);
                 pte.pt.table = 1;
+                pte.pt.ai = ai;
                 write_pte(&third[third_table_offset(addr)], pte);
                 break;
             case REMOVE:
@@ -915,7 +908,7 @@ static void set_pte_flags_on_range(const char *p, unsigned long l, enum mg mg)
         }
         write_pte(xen_xenmap + i, pte);
     }
-    flush_xen_text_tlb_local();
+    flush_xen_text_tlb();
 }
 
 /* Release all __init and __initdata ranges to be reused */
@@ -970,7 +963,7 @@ void share_xen_page_with_guest(struct page_info *page,
     page->u.inuse.type_info |= PGT_validated | 1;
 
     page_set_owner(page, d);
-    smp_wmb(); /* install valid domain ptr before updating refcnt. */
+    wmb(); /* install valid domain ptr before updating refcnt. */
     ASSERT((page->count_info & ~PGC_xen_heap) == 0);
 
     /* Only add to the allocation list if the domain isn't dying. */
@@ -1001,7 +994,6 @@ int xenmem_add_to_physmap_one(
     unsigned long mfn = 0;
     int rc;
     p2m_type_t t;
-    struct page_info *page = NULL;
 
     switch ( space )
     {
@@ -1049,6 +1041,7 @@ int xenmem_add_to_physmap_one(
     case XENMAPSPACE_gmfn_foreign:
     {
         struct domain *od;
+        struct page_info *page;
         p2m_type_t p2mt;
         od = rcu_lock_domain_by_any_id(foreign_domid);
         if ( od == NULL )
@@ -1097,14 +1090,6 @@ int xenmem_add_to_physmap_one(
 
     /* Map at new location. */
     rc = guest_physmap_add_entry(d, gpfn, mfn, 0, t);
-
-    /* If we fail to add the mapping, we need to drop the reference we
-     * took earlier on foreign pages */
-    if ( rc && space == XENMAPSPACE_gmfn_foreign )
-    {
-        ASSERT(page != NULL);
-        put_page(page);
-    }
 
     return rc;
 }
@@ -1250,16 +1235,6 @@ int is_iomem_page(unsigned long mfn)
         return 1;
     return 0;
 }
-
-void clear_and_clean_page(struct page_info *page)
-{
-    void *p = __map_domain_page(page);
-
-    clear_page(p);
-    clean_xen_dcache_va_range(p, PAGE_SIZE);
-    unmap_domain_page(p);
-}
-
 /*
  * Local variables:
  * mode: C

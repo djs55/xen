@@ -86,7 +86,8 @@ struct save_callbacks {
  */
 int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iters,
                    uint32_t max_factor, uint32_t flags /* XCFLAGS_xxx */,
-                   struct save_callbacks* callbacks, int hvm);
+                   struct save_callbacks* callbacks, int hvm,
+                   unsigned long vm_generationid_addr);
 
 
 /* callbacks provided by xc_domain_restore */
@@ -112,7 +113,9 @@ struct restore_callbacks {
  * @parm hvm non-zero if this is a HVM restore
  * @parm pae non-zero if this HVM domain has PAE support enabled
  * @parm superpages non-zero to allocate guest memory with superpages
+ * @parm no_incr_generationid non-zero if generation id is NOT to be incremented
  * @parm checkpointed_stream non-zero if the far end of the stream is using checkpointing
+ * @parm vm_generationid_addr returned with the address of the generation id buffer
  * @parm callbacks non-NULL to receive a callback to restore toolstack
  *       specific data
  * @return 0 on success, -1 on failure
@@ -122,7 +125,8 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
                       domid_t store_domid, unsigned int console_evtchn,
                       unsigned long *console_mfn, domid_t console_domid,
                       unsigned int hvm, unsigned int pae, int superpages,
-                      int checkpointed_stream,
+                      int no_incr_generationid, int checkpointed_stream,
+                      unsigned long *vm_generationid_addr,
                       struct restore_callbacks *callbacks);
 /**
  * xc_domain_restore writes a file to disk that contains the device
@@ -250,32 +254,11 @@ int xc_hvm_build_target_mem(xc_interface *xch,
                             int target,
                             const char *image_name);
 
-/*
- * Sets *lockfd to -1.
- * Has deallocated everything even on error.
- */
-int xc_suspend_evtchn_release(xc_interface *xch, xc_evtchn *xce, int domid, int suspend_evtchn, int *lockfd);
+int xc_suspend_evtchn_release(xc_interface *xch, xc_evtchn *xce, int domid, int suspend_evtchn);
 
-/**
- * This function eats the initial notification.
- * xce must not be used for anything else
- * See xc_suspend_evtchn_init_sane re lockfd.
- */
-int xc_suspend_evtchn_init_exclusive(xc_interface *xch, xc_evtchn *xce,
-                                     int domid, int port, int *lockfd);
+int xc_suspend_evtchn_init(xc_interface *xch, xc_evtchn *xce, int domid, int port);
 
-/* xce must not be used for anything else */
 int xc_await_suspend(xc_interface *xch, xc_evtchn *xce, int suspend_evtchn);
-
-/**
- * The port will be signaled immediately after this call
- * The caller should check the domain status and look for the next event
- * On success, *lockfd will be set to >=0 and *lockfd must be preserved
- * and fed to xc_suspend_evtchn_release.  (On error *lockfd is
- * undefined and xc_suspend_evtchn_release is not allowed.)
- */
-int xc_suspend_evtchn_init_sane(xc_interface *xch, xc_evtchn *xce,
-                                int domid, int port, int *lockfd);
 
 int xc_get_bit_size(xc_interface *xch,
                     const char *image_name, const char *cmdline,

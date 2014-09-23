@@ -72,7 +72,7 @@ static void post_flush(u32 t)
 
 void write_cr3(unsigned long cr3)
 {
-    unsigned long flags, cr4 = read_cr4();
+    unsigned long flags;
     u32 t;
 
     /* This non-reentrant function is sometimes called in interrupt context. */
@@ -82,9 +82,16 @@ void write_cr3(unsigned long cr3)
 
     hvm_flush_guest_tlbs();
 
-    write_cr4(cr4 & ~X86_CR4_PGE);
+#ifdef USER_MAPPINGS_ARE_GLOBAL
+    {
+        unsigned long cr4 = read_cr4();
+        write_cr4(cr4 & ~X86_CR4_PGE);
+        asm volatile ( "mov %0, %%cr3" : : "r" (cr3) : "memory" );
+        write_cr4(cr4);
+    }
+#else
     asm volatile ( "mov %0, %%cr3" : : "r" (cr3) : "memory" );
-    write_cr4(cr4);
+#endif
 
     post_flush(t);
 
@@ -116,13 +123,23 @@ void flush_area_local(const void *va, unsigned int flags)
         else
         {
             u32 t = pre_flush();
-            unsigned long cr4 = read_cr4();
 
             hvm_flush_guest_tlbs();
 
-            write_cr4(cr4 & ~X86_CR4_PGE);
-            barrier();
-            write_cr4(cr4);
+#ifndef USER_MAPPINGS_ARE_GLOBAL
+            if ( !(flags & FLUSH_TLB_GLOBAL) || !(read_cr4() & X86_CR4_PGE) )
+            {
+                asm volatile ( "mov %0, %%cr3"
+                               : : "r" (read_cr3()) : "memory" );
+            }
+            else
+#endif
+            {
+                unsigned long cr4 = read_cr4();
+                write_cr4(cr4 & ~X86_CR4_PGE);
+                barrier();
+                write_cr4(cr4);
+            }
 
             post_flush(t);
         }
@@ -135,8 +152,7 @@ void flush_area_local(const void *va, unsigned int flags)
         if ( order < (BITS_PER_LONG - PAGE_SHIFT) )
             sz = 1UL << (order + PAGE_SHIFT);
 
-        if ( !(flags & (FLUSH_TLB|FLUSH_TLB_GLOBAL)) &&
-             c->x86_clflush_size && c->x86_cache_size && sz &&
+        if ( c->x86_clflush_size && c->x86_cache_size && sz &&
              ((sz >> 10) < c->x86_cache_size) )
         {
             va = (const void *)((unsigned long)va & ~(sz - 1));

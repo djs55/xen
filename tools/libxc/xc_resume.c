@@ -33,26 +33,17 @@ static int modify_returncode(xc_interface *xch, uint32_t domid)
     struct domain_info_context *dinfo = &_dinfo;
     int rc;
 
-    if ( xc_domain_getinfo(xch, domid, 1, &info) != 1 ||
-         info.domid != domid )
+    if ( xc_domain_getinfo(xch, domid, 1, &info) != 1 )
     {
         PERROR("Could not get domain info");
-        return -1;
-    }
-
-    if ( !info.shutdown || (info.shutdown_reason != SHUTDOWN_suspend) )
-    {
-        ERROR("Dom %d not suspended: (shutdown %d, reason %d)", domid,
-              info.shutdown, info.shutdown_reason);
-        errno = EINVAL;
         return -1;
     }
 
     if ( info.hvm )
     {
         /* HVM guests without PV drivers have no return code to modify. */
-        uint64_t irq = 0;
-        xc_hvm_param_get(xch, domid, HVM_PARAM_CALLBACK_IRQ, &irq);
+        unsigned long irq = 0;
+        xc_get_hvm_param(xch, domid, HVM_PARAM_CALLBACK_IRQ, &irq);
         if ( !irq )
             return 0;
 
@@ -74,7 +65,7 @@ static int modify_returncode(xc_interface *xch, uint32_t domid)
     if ( (rc = xc_vcpu_getcontext(xch, domid, 0, &ctxt)) != 0 )
         return rc;
 
-    SET_FIELD(&ctxt, user_regs.eax, 1, dinfo->guest_width);
+    SET_FIELD(&ctxt, user_regs.eax, 1);
 
     if ( (rc = xc_vcpu_setcontext(xch, domid, 0, &ctxt)) != 0 )
         return rc;
@@ -202,7 +193,7 @@ static int xc_domain_resume_any(xc_interface *xch, uint32_t domid)
         goto out;
     }
 
-    mfn = GET_FIELD(&ctxt, user_regs.edx, dinfo->guest_width);
+    mfn = GET_FIELD(&ctxt, user_regs.edx);
 
     start_info = xc_map_foreign_range(xch, domid, PAGE_SIZE,
                                       PROT_READ | PROT_WRITE, mfn);

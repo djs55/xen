@@ -636,7 +636,7 @@ static u64 read_pci_mem_bar(u16 seg, u8 bus, u8 slot, u8 func, u8 bir, int vf)
             return 0;
         base = pos + PCI_SRIOV_BAR;
         vf -= PCI_BDF(bus, slot, func) + offset;
-        if ( vf < 0 )
+        if ( vf < 0 || (vf && vf % stride) )
             return 0;
         if ( stride )
         {
@@ -825,22 +825,32 @@ static int msix_capability_init(struct pci_dev *dev,
                                 msix->pba.last) )
             WARN();
 
-        if ( desc )
+        if ( dev->domain )
+            p2m_change_entry_type_global(dev->domain,
+                                         p2m_mmio_direct, p2m_mmio_direct);
+        if ( desc && (!dev->domain || !paging_mode_translate(dev->domain)) )
         {
-            struct domain *currd = current->domain;
-            struct domain *d = dev->domain ?: currd;
+            struct domain *d = dev->domain;
 
-            if ( !is_hardware_domain(currd) || d != currd )
-                printk("%s use of MSI-X on %04x:%02x:%02x.%u by Dom%d\n",
-                       is_hardware_domain(currd)
-                       ? XENLOG_WARNING "Potentially insecure"
-                       : XENLOG_ERR "Insecure",
-                       seg, bus, slot, func, d->domain_id);
-            if ( !is_hardware_domain(d) &&
-                 /* Assume a domain without memory has no mappings yet. */
-                 (!is_hardware_domain(currd) || d->tot_pages) )
-                domain_crash(d);
-            /* XXX How to deal with existing mappings? */
+            if ( !d )
+                for_each_domain(d)
+                    if ( !paging_mode_translate(d) &&
+                         (iomem_access_permitted(d, msix->table.first,
+                                                 msix->table.last) ||
+                          iomem_access_permitted(d, msix->pba.first,
+                                                 msix->pba.last)) )
+                        break;
+            if ( d )
+            {
+                if ( !is_hardware_domain(d) && msix->warned != d->domain_id )
+                {
+                    msix->warned = d->domain_id;
+                    printk(XENLOG_ERR
+                           "Potentially insecure use of MSI-X on %04x:%02x:%02x.%u by Dom%d\n",
+                           seg, bus, slot, func, d->domain_id);
+                }
+                /* XXX How to deal with existing mappings? */
+            }
         }
     }
     WARN_ON(msix->nr_entries != nr_entries);

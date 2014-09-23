@@ -307,7 +307,7 @@ out:
  * - last cpu and still active domains in cpupool
  * - cpu just being unplugged
  */
-static int cpupool_unassign_cpu(struct cpupool *c, unsigned int cpu)
+int cpupool_unassign_cpu(struct cpupool *c, unsigned int cpu)
 {
     int work_cpu;
     int ret;
@@ -471,24 +471,12 @@ static void cpupool_cpu_add(unsigned int cpu)
  */
 static int cpupool_cpu_remove(unsigned int cpu)
 {
-    int ret = -EBUSY;
-    struct cpupool **c;
+    int ret = 0;
 
     spin_lock(&cpupool_lock);
-    if ( cpumask_test_cpu(cpu, cpupool0->cpu_valid) )
-        ret = 0;
+    if ( !cpumask_test_cpu(cpu, cpupool0->cpu_valid))
+        ret = -EBUSY;
     else
-    {
-        for_each_cpupool(c)
-        {
-            if ( cpumask_test_cpu(cpu, (*c)->cpu_suspended ) )
-            {
-                ret = 0;
-                break;
-            }
-        }
-    }
-    if ( !ret )
         cpumask_set_cpu(cpu, &cpupool_locked_cpus);
     spin_unlock(&cpupool_lock);
 

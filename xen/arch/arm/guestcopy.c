@@ -1,8 +1,6 @@
 #include <xen/config.h>
 #include <xen/lib.h>
 #include <xen/domain_page.h>
-#include <xen/sched.h>
-#include <asm/current.h>
 
 #include <asm/mm.h>
 #include <asm/guest_access.h>
@@ -15,22 +13,20 @@ static unsigned long raw_copy_to_guest_helper(void *to, const void *from,
 
     while ( len )
     {
+        paddr_t g;
         void *p;
         unsigned size = min(len, (unsigned)PAGE_SIZE - offset);
-        struct page_info *page;
 
-        page = get_page_from_gva(current->domain, (vaddr_t) to, GV2M_WRITE);
-        if ( page == NULL )
+        if ( gvirt_to_maddr((vaddr_t) to, &g) )
             return len;
 
-        p = __map_domain_page(page);
+        p = map_domain_page(g>>PAGE_SHIFT);
         p += offset;
         memcpy(p, from, size);
         if ( flush_dcache )
             clean_xen_dcache_va_range(p, size);
 
         unmap_domain_page(p - offset);
-        put_page(page);
         len -= size;
         from += size;
         to += size;
@@ -62,20 +58,18 @@ unsigned long raw_clear_guest(void *to, unsigned len)
 
     while ( len )
     {
+        paddr_t g;
         void *p;
         unsigned size = min(len, (unsigned)PAGE_SIZE - offset);
-        struct page_info *page;
 
-        page = get_page_from_gva(current->domain, (vaddr_t) to, GV2M_WRITE);
-        if ( page == NULL )
+        if ( gvirt_to_maddr((vaddr_t) to, &g) )
             return len;
 
-        p = __map_domain_page(page);
+        p = map_domain_page(g>>PAGE_SHIFT);
         p += offset;
         memset(p, 0x00, size);
 
         unmap_domain_page(p - offset);
-        put_page(page);
         len -= size;
         to += size;
         /*
@@ -94,21 +88,19 @@ unsigned long raw_copy_from_guest(void *to, const void __user *from, unsigned le
 
     while ( len )
     {
+        paddr_t g;
         void *p;
         unsigned size = min(len, (unsigned)(PAGE_SIZE - offset));
-        struct page_info *page;
 
-        page = get_page_from_gva(current->domain, (vaddr_t) from, GV2M_READ);
-        if ( page == NULL )
+        if ( gvirt_to_maddr((vaddr_t) from & PAGE_MASK, &g) )
             return len;
 
-        p = __map_domain_page(page);
+        p = map_domain_page(g>>PAGE_SHIFT);
         p += ((vaddr_t)from & (~PAGE_MASK));
 
         memcpy(to, p, size);
 
         unmap_domain_page(p);
-        put_page(page);
         len -= size;
         from += size;
         to += size;

@@ -33,6 +33,8 @@
 #include "libxlutil.h"
 #include "xl.h"
 
+#define XEND_LOCK { "/var/lock/subsys/xend", "/var/lock/xend" }
+
 xentoollog_logger_stdiostream *logger;
 int dryrun_only;
 int force_execution;
@@ -46,9 +48,8 @@ char *default_gatewaydev = NULL;
 char *default_vifbackend = NULL;
 enum output_format default_output_format = OUTPUT_FORMAT_JSON;
 int claim_mode = 1;
-bool progress_use_cr = 0;
 
-xentoollog_level minmsglevel = minmsglevel_default;
+static xentoollog_level minmsglevel = XTL_PROGRESS;
 
 /* Get autoballoon option based on presence of dom0_mem Xen command
    line option. */
@@ -187,13 +188,12 @@ void postfork(void)
     xl_ctx_alloc();
 }
 
-pid_t xl_fork(xlchildnum child, const char *description) {
+pid_t xl_fork(xlchildnum child) {
     xlchild *ch = &children[child];
     int i;
 
     assert(!ch->pid);
     ch->reaped = 0;
-    ch->description = description;
 
     ch->pid = fork();
     if (ch->pid == -1) {
@@ -235,13 +235,6 @@ int xl_child_pid(xlchildnum child)
 {
     xlchild *ch = &children[child];
     return ch->pid;
-}
-
-void xl_report_child_exitstatus(xentoollog_level level,
-                                xlchildnum child, pid_t pid, int status)
-{
-    libxl_report_child_exitstatus(ctx, level, children[child].description,
-                                  pid, status);
 }
 
 static int xl_reaped_callback(pid_t got, int status, void *user)
@@ -297,8 +290,9 @@ int main(int argc, char **argv)
     int ret;
     void *config_data = 0;
     int config_len = 0;
+    const char *locks[] = XEND_LOCK;
 
-    while ((opt = getopt(argc, argv, "+vftN")) >= 0) {
+    while ((opt = getopt(argc, argv, "+vfN")) >= 0) {
         switch (opt) {
         case 'v':
             if (minmsglevel > 0) minmsglevel--;
@@ -308,9 +302,6 @@ int main(int argc, char **argv)
             break;
         case 'f':
             force_execution = 1;
-            break;
-        case 't':
-            progress_use_cr = 1;
             break;
         default:
             fprintf(stderr, "unknown global option\n");
@@ -326,8 +317,7 @@ int main(int argc, char **argv)
     }
     opterr = 0;
 
-    logger = xtl_createlogger_stdiostream(stderr, minmsglevel,
-        (progress_use_cr ? XTL_STDIOSTREAM_PROGRESS_USE_CR : 0));
+    logger = xtl_createlogger_stdiostream(stderr, minmsglevel,  0);
     if (!logger) exit(1);
 
     atexit(xl_ctx_free);
@@ -353,6 +343,19 @@ int main(int argc, char **argv)
             fprintf(stderr, "command does not implement -N (dryrun) option\n");
             ret = 1;
             goto xit;
+        }
+        if (cspec->modifies && !dryrun_only) {
+            for (int i = 0; i < sizeof(locks)/sizeof(locks[0]); i++) {
+                if (!access(locks[i], F_OK) && !force_execution) {
+                    fprintf(stderr,
+"xend is running, which may cause unpredictable results when using\n"
+"this xl command.  Please shut down xend before continuing.\n\n"
+"(This check can be overridden with the -f option.)\n"
+                            );
+                    ret = 1;
+                    goto xit;
+                }
+            }
         }
         ret = cspec->cmd_impl(argc, argv);
     } else if (!strcmp(cmd, "help")) {

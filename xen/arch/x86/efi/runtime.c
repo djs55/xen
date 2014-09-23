@@ -10,8 +10,6 @@ DEFINE_XEN_GUEST_HANDLE(CHAR16);
 
 #ifndef COMPAT
 
-# include <asm/i387.h>
-# include <asm/xstate.h>
 # include <public/platform.h>
 
 const bool_t efi_enabled = 1;
@@ -47,13 +45,7 @@ const struct efi_pci_rom *__read_mostly efi_pci_roms;
 
 unsigned long efi_rs_enter(void)
 {
-    static const u16 fcw = FCW_DEFAULT;
-    static const u32 mxcsr = MXCSR_DEFAULT;
     unsigned long cr3 = read_cr3();
-
-    save_fpu_enable();
-    asm volatile ( "fldcw %0" :: "m" (fcw) );
-    asm volatile ( "ldmxcsr %0" :: "m" (mxcsr) );
 
     spin_lock(&efi_rs_lock);
 
@@ -90,7 +82,6 @@ void efi_rs_leave(unsigned long cr3)
     }
     irq_exit();
     spin_unlock(&efi_rs_lock);
-    stts();
 }
 
 unsigned long efi_get_time(void)

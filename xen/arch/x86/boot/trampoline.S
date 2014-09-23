@@ -109,8 +109,11 @@ trampoline_protmode_entry:
         .code64
 start64:
         /* Jump to high mappings. */
-        movabs  $__high_start,%rax
+        mov     high_start(%rip),%rax
         jmpq    *%rax
+
+high_start:
+        .quad   __high_start
 
         .code32
 trampoline_boot_cpu_entry:

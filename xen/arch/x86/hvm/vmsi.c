@@ -43,12 +43,14 @@
 #include <asm/io_apic.h>
 
 static void vmsi_inj_irq(
+    struct domain *d,
     struct vlapic *target,
     uint8_t vector,
     uint8_t trig_mode,
     uint8_t delivery_mode)
 {
-    HVM_DBG_LOG(DBG_LEVEL_VLAPIC, "vmsi_inj_irq: vec %02x trig %d dm %d\n",
+    HVM_DBG_LOG(DBG_LEVEL_IOAPIC, "vmsi_inj_irq "
+                "irq %d trig %d delive mode %d\n",
                 vector, trig_mode, delivery_mode);
 
     switch ( delivery_mode )
@@ -58,7 +60,8 @@ static void vmsi_inj_irq(
         vlapic_set_irq(target, vector, trig_mode);
         break;
     default:
-        BUG();
+        gdprintk(XENLOG_WARNING, "error delivery mode %d\n", delivery_mode);
+        break;
     }
 }
 
@@ -73,32 +76,38 @@ int vmsi_deliver(
     switch ( delivery_mode )
     {
     case dest_LowestPrio:
+    {
         target = vlapic_lowest_prio(d, NULL, 0, dest, dest_mode);
         if ( target != NULL )
-        {
-            vmsi_inj_irq(target, vector, trig_mode, delivery_mode);
-            break;
-        }
-        HVM_DBG_LOG(DBG_LEVEL_VLAPIC, "null MSI round robin: vector=%02x\n",
-                    vector);
-        return -ESRCH;
+            vmsi_inj_irq(d, target, vector, trig_mode, delivery_mode);
+        else
+            HVM_DBG_LOG(DBG_LEVEL_IOAPIC, "null round robin: "
+                        "vector=%x delivery_mode=%x\n",
+                        vector, dest_LowestPrio);
+        break;
+    }
 
     case dest_Fixed:
+    case dest_ExtINT:
+    {
         for_each_vcpu ( d, v )
             if ( vlapic_match_dest(vcpu_vlapic(v), NULL,
                                    0, dest, dest_mode) )
-                vmsi_inj_irq(vcpu_vlapic(v), vector,
-                             trig_mode, delivery_mode);
+                vmsi_inj_irq(d, vcpu_vlapic(v),
+                             vector, trig_mode, delivery_mode);
         break;
-
-    default:
-        printk(XENLOG_G_WARNING
-               "%pv: Unsupported MSI delivery mode %d for Dom%d\n",
-               current, delivery_mode, d->domain_id);
-        return -EINVAL;
     }
 
-    return 0;
+    case dest_SMI:
+    case dest_NMI:
+    case dest_INIT:
+    case dest__reserved_2:
+    default:
+        gdprintk(XENLOG_WARNING, "Unsupported delivery mode %d\n",
+                 delivery_mode);
+        break;
+    }
+    return 1;
 }
 
 void vmsi_deliver_pirq(struct domain *d, const struct hvm_pirq_dpci *pirq_dpci)

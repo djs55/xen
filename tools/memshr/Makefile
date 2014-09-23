@@ -9,6 +9,7 @@ CFLAGS          += $(CFLAGS_xeninclude)
 CFLAGS          += $(CFLAGS_libxenctrl)
 CFLAGS          += -D_GNU_SOURCE
 CFLAGS          += -fPIC
+CFLAGS          += -g
 
 LIB-SRCS        := interface.c
 LIB-SRCS        += shm.c

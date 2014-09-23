@@ -53,21 +53,28 @@ static int hvmemul_do_io(
     int is_mmio, paddr_t addr, unsigned long *reps, int size,
     paddr_t ram_gpa, int dir, int df, void *p_data)
 {
+    paddr_t value = ram_gpa;
+    int value_is_ptr = (p_data == NULL);
     struct vcpu *curr = current;
     struct hvm_vcpu_io *vio;
-    ioreq_t p = {
-        .type = is_mmio ? IOREQ_TYPE_COPY : IOREQ_TYPE_PIO,
-        .addr = addr,
-        .size = size,
-        .dir = dir,
-        .df = df,
-        .data = ram_gpa,
-        .data_is_ptr = (p_data == NULL),
-    };
+    ioreq_t *p = get_ioreq(curr);
+    ioreq_t _ioreq;
     unsigned long ram_gfn = paddr_to_pfn(ram_gpa);
     p2m_type_t p2mt;
     struct page_info *ram_page;
     int rc;
+    bool_t has_dm = 1;
+
+    /*
+     * Domains without a backing DM, don't have an ioreq page.  Just
+     * point to a struct on the stack, initialising the state as needed.
+     */
+    if ( !p )
+    {
+        has_dm = 0;
+        p = &_ioreq;
+        p->state = STATE_IOREQ_NONE;
+    }
 
     /* Check for paged out page */
     ram_page = get_page_from_gfn(curr->domain, ram_gfn, &p2mt, P2M_UNSHARE);
@@ -100,15 +107,15 @@ static int hvmemul_do_io(
         return X86EMUL_UNHANDLEABLE;
     }
 
-    if ( !p.data_is_ptr && (dir == IOREQ_WRITE) )
+    if ( (p_data != NULL) && (dir == IOREQ_WRITE) )
     {
-        memcpy(&p.data, p_data, size);
+        memcpy(&value, p_data, size);
         p_data = NULL;
     }
 
     vio = &curr->arch.hvm_vcpu.hvm_io;
 
-    if ( is_mmio && !p.data_is_ptr )
+    if ( is_mmio && !value_is_ptr )
     {
         /* Part of a multi-cycle read or write? */
         if ( dir == IOREQ_WRITE )
@@ -152,7 +159,7 @@ static int hvmemul_do_io(
         goto finish_access;
     case HVMIO_dispatched:
         /* May have to wait for previous cycle of a multi-write to complete. */
-        if ( is_mmio && !p.data_is_ptr && (dir == IOREQ_WRITE) &&
+        if ( is_mmio && !value_is_ptr && (dir == IOREQ_WRITE) &&
              (addr == (vio->mmio_large_write_pa +
                        vio->mmio_large_write_bytes)) )
         {
@@ -166,9 +173,10 @@ static int hvmemul_do_io(
         return X86EMUL_UNHANDLEABLE;
     }
 
-    if ( hvm_io_pending(curr) )
+    if ( p->state != STATE_IOREQ_NONE )
     {
-        gdprintk(XENLOG_WARNING, "WARNING: io already pending?\n");
+        gdprintk(XENLOG_WARNING, "WARNING: io already pending (%d)?\n",
+                 p->state);
         if ( ram_page )
             put_page(ram_page);
         return X86EMUL_UNHANDLEABLE;
@@ -185,31 +193,38 @@ static int hvmemul_do_io(
     if ( vio->mmio_retrying )
         *reps = 1;
 
-    p.count = *reps;
+    p->dir = dir;
+    p->data_is_ptr = value_is_ptr;
+    p->type = is_mmio ? IOREQ_TYPE_COPY : IOREQ_TYPE_PIO;
+    p->size = size;
+    p->addr = addr;
+    p->count = *reps;
+    p->df = df;
+    p->data = value;
 
     if ( dir == IOREQ_WRITE )
-        hvmtrace_io_assist(is_mmio, &p);
+        hvmtrace_io_assist(is_mmio, p);
 
     if ( is_mmio )
     {
-        rc = hvm_mmio_intercept(&p);
+        rc = hvm_mmio_intercept(p);
         if ( rc == X86EMUL_UNHANDLEABLE )
-            rc = hvm_buffered_io_intercept(&p);
+            rc = hvm_buffered_io_intercept(p);
     }
     else
     {
-        rc = hvm_portio_intercept(&p);
+        rc = hvm_portio_intercept(p);
     }
 
     switch ( rc )
     {
     case X86EMUL_OKAY:
     case X86EMUL_RETRY:
-        *reps = p.count;
-        p.state = STATE_IORESP_READY;
+        *reps = p->count;
+        p->state = STATE_IORESP_READY;
         if ( !vio->mmio_retry )
         {
-            hvm_io_assist(&p);
+            hvm_io_assist(p);
             vio->io_state = HVMIO_none;
         }
         else
@@ -218,7 +233,7 @@ static int hvmemul_do_io(
         break;
     case X86EMUL_UNHANDLEABLE:
         /* If there is no backing DM, just ignore accesses */
-        if ( !hvm_has_dm(curr->domain) )
+        if ( !has_dm )
         {
             rc = X86EMUL_OKAY;
             vio->io_state = HVMIO_none;
@@ -226,7 +241,7 @@ static int hvmemul_do_io(
         else
         {
             rc = X86EMUL_RETRY;
-            if ( !hvm_send_assist_req(&p) )
+            if ( !hvm_send_assist_req(curr) )
                 vio->io_state = HVMIO_none;
             else if ( p_data == NULL )
                 rc = X86EMUL_OKAY;
@@ -245,12 +260,12 @@ static int hvmemul_do_io(
 
  finish_access:
     if ( dir == IOREQ_READ )
-        hvmtrace_io_assist(is_mmio, &p);
+        hvmtrace_io_assist(is_mmio, p);
 
     if ( p_data != NULL )
         memcpy(p_data, &vio->io_data, size);
 
-    if ( is_mmio && !p.data_is_ptr )
+    if ( is_mmio && !value_is_ptr )
     {
         /* Part of a multi-cycle read or write? */
         if ( dir == IOREQ_WRITE )
@@ -481,11 +496,10 @@ static int __hvmemul_read(
         while ( off & (chunk - 1) )
             chunk >>= 1;
 
-    if ( ((access_type != hvm_access_insn_fetch
-           ? vio->mmio_access.read_access
-           : vio->mmio_access.insn_fetch)) &&
-         (vio->mmio_gva == (addr & PAGE_MASK)) )
+    if ( unlikely(vio->mmio_gva == (addr & PAGE_MASK)) && vio->mmio_gva )
     {
+        if ( access_type == hvm_access_insn_fetch )
+            return X86EMUL_UNHANDLEABLE;
         gpa = (((paddr_t)vio->mmio_gpfn << PAGE_SHIFT) | off);
         while ( (off + chunk) <= PAGE_SIZE )
         {
@@ -625,8 +639,7 @@ static int hvmemul_write(
         while ( off & (chunk - 1) )
             chunk >>= 1;
 
-    if ( vio->mmio_access.write_access &&
-         (vio->mmio_gva == (addr & PAGE_MASK)) )
+    if ( unlikely(vio->mmio_gva == (addr & PAGE_MASK)) && vio->mmio_gva )
     {
         gpa = (((paddr_t)vio->mmio_gpfn << PAGE_SHIFT) | off);
         while ( (off + chunk) <= PAGE_SIZE )
@@ -687,94 +700,6 @@ static int hvmemul_write(
         return X86EMUL_UNHANDLEABLE;
     }
 
-    return X86EMUL_OKAY;
-}
-
-static int hvmemul_write_discard(
-    enum x86_segment seg,
-    unsigned long offset,
-    void *p_data,
-    unsigned int bytes,
-    struct x86_emulate_ctxt *ctxt)
-{
-    /* Discarding the write. */
-    return X86EMUL_OKAY;
-}
-
-static int hvmemul_rep_ins_discard(
-    uint16_t src_port,
-    enum x86_segment dst_seg,
-    unsigned long dst_offset,
-    unsigned int bytes_per_rep,
-    unsigned long *reps,
-    struct x86_emulate_ctxt *ctxt)
-{
-    return X86EMUL_OKAY;
-}
-
-static int hvmemul_rep_movs_discard(
-   enum x86_segment src_seg,
-   unsigned long src_offset,
-   enum x86_segment dst_seg,
-   unsigned long dst_offset,
-   unsigned int bytes_per_rep,
-   unsigned long *reps,
-   struct x86_emulate_ctxt *ctxt)
-{
-    return X86EMUL_OKAY;
-}
-
-static int hvmemul_rep_outs_discard(
-    enum x86_segment src_seg,
-    unsigned long src_offset,
-    uint16_t dst_port,
-    unsigned int bytes_per_rep,
-    unsigned long *reps,
-    struct x86_emulate_ctxt *ctxt)
-{
-    return X86EMUL_OKAY;
-}
-
-static int hvmemul_cmpxchg_discard(
-    enum x86_segment seg,
-    unsigned long offset,
-    void *p_old,
-    void *p_new,
-    unsigned int bytes,
-    struct x86_emulate_ctxt *ctxt)
-{
-    return X86EMUL_OKAY;
-}
-
-static int hvmemul_read_io_discard(
-    unsigned int port,
-    unsigned int bytes,
-    unsigned long *val,
-    struct x86_emulate_ctxt *ctxt)
-{
-    return X86EMUL_OKAY;
-}
-
-static int hvmemul_write_io_discard(
-    unsigned int port,
-    unsigned int bytes,
-    unsigned long val,
-    struct x86_emulate_ctxt *ctxt)
-{
-    return X86EMUL_OKAY;
-}
-
-static int hvmemul_write_msr_discard(
-    unsigned long reg,
-    uint64_t val,
-    struct x86_emulate_ctxt *ctxt)
-{
-    return X86EMUL_OKAY;
-}
-
-static int hvmemul_wbinvd_discard(
-    struct x86_emulate_ctxt *ctxt)
-{
     return X86EMUL_OKAY;
 }
 
@@ -1228,33 +1153,8 @@ static const struct x86_emulate_ops hvm_emulate_ops = {
     .invlpg        = hvmemul_invlpg
 };
 
-static const struct x86_emulate_ops hvm_emulate_ops_no_write = {
-    .read          = hvmemul_read,
-    .insn_fetch    = hvmemul_insn_fetch,
-    .write         = hvmemul_write_discard,
-    .cmpxchg       = hvmemul_cmpxchg_discard,
-    .rep_ins       = hvmemul_rep_ins_discard,
-    .rep_outs      = hvmemul_rep_outs_discard,
-    .rep_movs      = hvmemul_rep_movs_discard,
-    .read_segment  = hvmemul_read_segment,
-    .write_segment = hvmemul_write_segment,
-    .read_io       = hvmemul_read_io_discard,
-    .write_io      = hvmemul_write_io_discard,
-    .read_cr       = hvmemul_read_cr,
-    .write_cr      = hvmemul_write_cr,
-    .read_msr      = hvmemul_read_msr,
-    .write_msr     = hvmemul_write_msr_discard,
-    .wbinvd        = hvmemul_wbinvd_discard,
-    .cpuid         = hvmemul_cpuid,
-    .inject_hw_exception = hvmemul_inject_hw_exception,
-    .inject_sw_interrupt = hvmemul_inject_sw_interrupt,
-    .get_fpu       = hvmemul_get_fpu,
-    .put_fpu       = hvmemul_put_fpu,
-    .invlpg        = hvmemul_invlpg
-};
-
-static int _hvm_emulate_one(struct hvm_emulate_ctxt *hvmemul_ctxt,
-    const struct x86_emulate_ops *ops)
+int hvm_emulate_one(
+    struct hvm_emulate_ctxt *hvmemul_ctxt)
 {
     struct cpu_user_regs *regs = hvmemul_ctxt->ctxt.regs;
     struct vcpu *curr = current;
@@ -1306,7 +1206,7 @@ static int _hvm_emulate_one(struct hvm_emulate_ctxt *hvmemul_ctxt,
     vio->mmio_retrying = vio->mmio_retry;
     vio->mmio_retry = 0;
 
-    rc = x86_emulate(&hvmemul_ctxt->ctxt, ops);
+    rc = x86_emulate(&hvmemul_ctxt->ctxt, &hvm_emulate_ops);
 
     if ( rc == X86EMUL_OKAY && vio->mmio_retry )
         rc = X86EMUL_RETRY;
@@ -1354,62 +1254,6 @@ static int _hvm_emulate_one(struct hvm_emulate_ctxt *hvmemul_ctxt,
     return X86EMUL_OKAY;
 }
 
-int hvm_emulate_one(
-    struct hvm_emulate_ctxt *hvmemul_ctxt)
-{
-    return _hvm_emulate_one(hvmemul_ctxt, &hvm_emulate_ops);
-}
-
-int hvm_emulate_one_no_write(
-    struct hvm_emulate_ctxt *hvmemul_ctxt)
-{
-    return _hvm_emulate_one(hvmemul_ctxt, &hvm_emulate_ops_no_write);
-}
-
-void hvm_mem_event_emulate_one(bool_t nowrite, unsigned int trapnr,
-    unsigned int errcode)
-{
-    struct hvm_emulate_ctxt ctx = {{ 0 }};
-    int rc;
-
-    hvm_emulate_prepare(&ctx, guest_cpu_user_regs());
-
-    if ( nowrite )
-        rc = hvm_emulate_one_no_write(&ctx);
-    else
-        rc = hvm_emulate_one(&ctx);
-
-    switch ( rc )
-    {
-    case X86EMUL_RETRY:
-        /*
-         * This function is called when handling an EPT-related mem_event
-         * reply. As such, nothing else needs to be done here, since simply
-         * returning makes the current instruction cause a page fault again,
-         * consistent with X86EMUL_RETRY.
-         */
-        return;
-    case X86EMUL_UNHANDLEABLE:
-        gdprintk(XENLOG_DEBUG, "Emulation failed @ %04x:%lx: "
-               "%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
-               hvmemul_get_seg_reg(x86_seg_cs, &ctx)->sel,
-               ctx.insn_buf_eip,
-               ctx.insn_buf[0], ctx.insn_buf[1],
-               ctx.insn_buf[2], ctx.insn_buf[3],
-               ctx.insn_buf[4], ctx.insn_buf[5],
-               ctx.insn_buf[6], ctx.insn_buf[7],
-               ctx.insn_buf[8], ctx.insn_buf[9]);
-        hvm_inject_hw_exception(trapnr, errcode);
-        break;
-    case X86EMUL_EXCEPTION:
-        if ( ctx.exn_pending )
-            hvm_inject_hw_exception(ctx.exn_vector, ctx.exn_error_code);
-        break;
-    }
-
-    hvm_emulate_writeback(&ctx);
-}
-
 void hvm_emulate_prepare(
     struct hvm_emulate_ctxt *hvmemul_ctxt,
     struct cpu_user_regs *regs)
@@ -1448,13 +1292,3 @@ struct segment_register *hvmemul_get_seg_reg(
         hvm_get_segment_register(current, seg, &hvmemul_ctxt->seg_reg[seg]);
     return &hvmemul_ctxt->seg_reg[seg];
 }
-
-/*
- * Local variables:
- * mode: C
- * c-file-style: "BSD"
- * c-basic-offset: 4
- * tab-width: 4
- * indent-tabs-mode: nil
- * End:
- */

@@ -56,9 +56,7 @@ bool_t __initdata acpi_ht = 1;	/* enable HT */
 bool_t __initdata acpi_lapic;
 bool_t __initdata acpi_ioapic;
 
-/* acpi_skip_timer_override: Skip IRQ0 overrides. */
-static bool_t acpi_skip_timer_override __initdata;
-boolean_param("acpi_skip_timer_override", acpi_skip_timer_override);
+bool_t acpi_skip_timer_override __initdata;
 
 #ifdef CONFIG_X86_LOCAL_APIC
 static u64 acpi_lapic_addr __initdata = APIC_DEFAULT_PHYS_BASE;
@@ -404,15 +402,11 @@ acpi_fadt_parse_sleep_info(struct acpi_table_fadt *fadt)
 	acpi_fadt_copy_address(pm1b_evt, pm1b_event, pm1_event);
 
 	printk(KERN_INFO PREFIX
-	       "SLEEP INFO: pm1x_cnt[%d:%"PRIx64",%d:%"PRIx64"], "
-	       "pm1x_evt[%d:%"PRIx64",%d:%"PRIx64"]\n",
-	       acpi_sinfo.pm1a_cnt_blk.space_id,
+	       "SLEEP INFO: pm1x_cnt[%"PRIx64",%"PRIx64"], "
+	       "pm1x_evt[%"PRIx64",%"PRIx64"]\n",
 	       acpi_sinfo.pm1a_cnt_blk.address,
-	       acpi_sinfo.pm1b_cnt_blk.space_id,
 	       acpi_sinfo.pm1b_cnt_blk.address,
-	       acpi_sinfo.pm1a_evt_blk.space_id,
 	       acpi_sinfo.pm1a_evt_blk.address,
-	       acpi_sinfo.pm1b_evt_blk.space_id,
 	       acpi_sinfo.pm1b_evt_blk.address);
 
 	/* Now FACS... */
@@ -753,8 +747,6 @@ int __init acpi_boot_init(void)
 	acpi_dmar_init();
 
 	erst_init();
-
-	acpi_hest_init();
 
 	acpi_table_parse(ACPI_SIG_BGRT, acpi_invalidate_bgrt);
 

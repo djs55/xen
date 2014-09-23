@@ -13,7 +13,6 @@
 #include <irq_vectors.h>
 
 ENTRY(compat_hypercall)
-        ASM_CLAC
         pushq $0
         SAVE_VOLATILE type=TRAP_syscall compat=1
 
@@ -405,7 +404,7 @@ ENTRY(compat_hypercall_table)
         .quad compat_vcpu_op
         .quad compat_ni_hypercall       /* 25 */
         .quad compat_mmuext_op
-        .quad compat_xsm_op
+        .quad do_xsm_op
         .quad compat_nmi_op
         .quad compat_sched_op
         .quad compat_callback_op        /* 30 */

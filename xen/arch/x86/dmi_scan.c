@@ -18,16 +18,16 @@
 #define memcpy_fromio    memcpy
 #define alloc_bootmem(l) xmalloc_bytes(l)
 
-struct __packed dmi_eps {
+struct dmi_eps {
 	char anchor[5];			/* "_DMI_" */
 	u8 checksum;
 	u16 size;
 	u32 address;
 	u16 num_structures;
 	u8 revision;
-};
+} __attribute__((packed));
 
-struct __packed smbios_eps {
+struct smbios_eps {
 	char anchor[4];			/* "_SM_" */
 	u8 checksum;
 	u8 length;
@@ -36,7 +36,7 @@ struct __packed smbios_eps {
 	u8 revision;
 	u8 _rsrvd_[5];
 	struct dmi_eps dmi;
-};
+} __attribute__((packed));
 
 struct dmi_header
 {

@@ -38,10 +38,6 @@
 #include <xen/sched.h>
 #include <mini-os/mm.h>
 
-typedef struct { unsigned long pte; } pte_t;
-
-#define __pte(x) ((pte_t) { (x) } )
-
 #define __STR(x) #x
 #define STR(x) __STR(x)
 

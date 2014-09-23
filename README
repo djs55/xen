@@ -1,9 +1,9 @@
 #################################
-__  __            _  _    ____                        _        _     _      
-\ \/ /___ _ __   | || |  | ___|       _   _ _ __  ___| |_ __ _| |__ | | ___ 
- \  // _ \ '_ \  | || |_ |___ \ _____| | | | '_ \/ __| __/ _` | '_ \| |/ _ \
- /  \  __/ | | | |__   _| ___) |_____| |_| | | | \__ \ || (_| | |_) | |  __/
-/_/\_\___|_| |_|    |_|(_)____/       \__,_|_| |_|___/\__\__,_|_.__/|_|\___|
+__  __            _  _   _  _ 
+\ \/ /___ _ __   | || | | || |
+ \  // _ \ '_ \  | || |_| || |_
+ /  \  __/ | | | |__   _|__   _|
+/_/\_\___|_| |_|    |_|(_) |_|
 
 #################################
 
@@ -19,14 +19,16 @@ is freely-distributable Open Source software, released under the GNU
 GPL. Since its initial public release, Xen has grown a large
 development community, spearheaded by xen.org (http://www.xen.org).
 
-The 4.3 release offers a number of improvements, including NUMA
-scheduling affinity, openvswitch integration, and defaulting to
-qemu-xen rather than qemu-traditional for non-stubdom guests.
-(qemu-xen is kept very close to the upstream project.)  We also have a
-number of updates to vTPM, and improvements to XSM and Flask to allow
-greater disaggregation.  Additionally, 4.3 contains a basic version of
-Xen for the new ARM server architecture, both 32- and 64-bit.  And as
-always, there are a number of performance, stability, and security
+The 4.4 release offers a number of improvements, including solid
+support for libvirt running on libxl, a new scalable event channel
+interface, improved flexibility for driver domains, an experimental
+"PVH" virtualization mode, improved kexec support, and improved
+support for SPICE clients.  Additionally, the ARM platform has had a
+number of improvements.  The most important of these is that the
+hypervisor ABIs for both arm32 and arm64 have been declared stable.
+Additionally, many new ARM platforms have been added, and changes have
+been made that will make adding new platforms easier.  And as always,
+there are a number of performance, stability, and security
 improvements under-the hood.
 
 This file contains some quick-start instructions to install Xen on
@@ -72,7 +74,6 @@ disabled at compile time:
     * cmake (if building vtpm stub domains)
     * markdown
     * figlet (for generating the traditional Xen start of day banner)
-    * systemd daemon development files
 
 Second, you need to acquire a suitable kernel for use in domain 0. If
 possible you should use a kernel provided by your OS distributor. If
@@ -130,53 +131,6 @@ performed with root privileges.]
    versions of those scripts, so that you can copy the dist directory
    to another machine and install from that distribution.
 
-xenstore: xenstored and oxenstored
-====================================
-
-Xen uses a configuration database called xenstore [0] to maintain configuration
-and status information shared between domains. A daemon is implemented as part
-of xenstore to act as an interface for access to the database for dom0 and
-guests. Two xenstored daemons are supported, one written in C which we refer
-to as the xenstored (sometimes referred to as cxenstored), and another written
-in Ocaml called oxenstored. Details for xenstore and the different
-implementations can be found on the wiki's xenstore reference guide [1] and
-the xenstored [2] page. You can choose which xenstore you want to enable as
-default on a system through configure:
-
-	./configure --with-xenstored=xenstored
-	./configure --with-xenstored=oxenstored
-
-By default oxenstored will be used if the ocaml development tools are found.
-If you enable oxenstored the xenstored will still be built and installed,
-the xenstored used can be changed through the configuration file:
-
-/etc/sysconfig/xencommons
-or
-/etc/default/xencommons
-
-You can change the preferred xenstored you want to use in the configuration
-but since we cannot stop the daemon a reboot will be required to make the
-change take effect.
-
-[0] http://wiki.xen.org/wiki/XenStore
-[1] http://wiki.xen.org/wiki/XenStoreReference
-[2] http://wiki.xen.org/wiki/Xenstored
-
-Systemd support
-===============
-
-If you have systemd development packages installed you can build binaries
-with systemd support. Systemd support is enabled by default if you have
-systemd development libraries present. If you want to force enable systemd to
-ensure you build binaries with systemd support you can use the --enable-systemd
-flag. Likewise if you want to force disable systemd you can use:
-
-	./configure --disable-systemd
-
-For more details refer to the xen xenstored systemd wiki page [3].
-
-[3] http://wiki.xen.org/wiki/Xenstored#xenstored_systemd_support
-
 Python Runtime Libraries
 ========================
 
@@ -231,15 +185,3 @@ There are optional targets as part of Xen's top-level makefile that will
 download and build tboot: install-tboot, build-tboot, dist-tboot, clean-tboot.
 These will download the latest tar file from the SourceForge site using wget,
 then build/install/dist according to Xen's settings.
-
-Required Kernel modules
-======================
-
-Xen has a set of Kernel modules which the init scripts ensure to load before
-before starting Xen guests. The list of modules are maintained in one place:
-
-  * config/$(XEN_OS).modules
-
-For more details refer to:
-
-http://wiki.xen.org/wiki/Category:Host_Configuration#Kernel_modules

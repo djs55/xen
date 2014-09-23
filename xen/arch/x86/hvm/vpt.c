@@ -36,7 +36,7 @@ void hvm_init_guest_time(struct domain *d)
     pl->last_guest_time = 0;
 }
 
-u64 hvm_get_guest_time_fixed(struct vcpu *v, u64 at_tsc)
+u64 hvm_get_guest_time(struct vcpu *v)
 {
     struct pl_time *pl = &v->domain->arch.hvm_domain.pl_time;
     u64 now;
@@ -45,15 +45,11 @@ u64 hvm_get_guest_time_fixed(struct vcpu *v, u64 at_tsc)
     ASSERT(is_hvm_vcpu(v));
 
     spin_lock(&pl->pl_time_lock);
-    now = get_s_time_fixed(at_tsc) + pl->stime_offset;
-
-    if ( !at_tsc )
-    {
-        if ( (int64_t)(now - pl->last_guest_time) > 0 )
-            pl->last_guest_time = now;
-        else
-            now = ++pl->last_guest_time;
-    }
+    now = get_s_time() + pl->stime_offset;
+    if ( (int64_t)(now - pl->last_guest_time) > 0 )
+        pl->last_guest_time = now;
+    else
+        now = ++pl->last_guest_time;
     spin_unlock(&pl->pl_time_lock);
 
     return now + v->arch.hvm_vcpu.stime_offset;
@@ -235,9 +231,12 @@ int pt_update_irq(struct vcpu *v)
     struct periodic_time *pt, *temp, *earliest_pt;
     uint64_t max_lag;
     int irq, is_lapic;
+    void *pt_priv;
 
+ rescan:
     spin_lock(&v->arch.hvm_vcpu.tm_lock);
 
+ rescan_locked:
     earliest_pt = NULL;
     max_lag = -1ULL;
     list_for_each_entry_safe ( pt, temp, head, list )
@@ -271,11 +270,48 @@ int pt_update_irq(struct vcpu *v)
     earliest_pt->irq_issued = 1;
     irq = earliest_pt->irq;
     is_lapic = (earliest_pt->source == PTSRC_lapic);
+    pt_priv = earliest_pt->priv;
 
     spin_unlock(&v->arch.hvm_vcpu.tm_lock);
 
     if ( is_lapic )
         vlapic_set_irq(vcpu_vlapic(v), irq, 0);
+    else if ( irq == RTC_IRQ && pt_priv )
+    {
+        if ( !rtc_periodic_interrupt(pt_priv) )
+            irq = -1;
+
+        pt_lock(earliest_pt);
+
+        if ( irq < 0 && earliest_pt->pending_intr_nr )
+        {
+            /*
+             * RTC periodic timer runs without the corresponding interrupt
+             * being enabled - need to mimic enough of pt_intr_post() to keep
+             * things going.
+             */
+            earliest_pt->pending_intr_nr = 0;
+            earliest_pt->irq_issued = 0;
+            set_timer(&earliest_pt->timer, earliest_pt->scheduled);
+        }
+        else if ( irq >= 0 && pt_irq_masked(earliest_pt) )
+        {
+            if ( earliest_pt->on_list )
+            {
+                /* suspend timer emulation */
+                list_del(&earliest_pt->list);
+                earliest_pt->on_list = 0;
+            }
+            irq = -1;
+        }
+
+        /* Avoid dropping the lock if we can. */
+        if ( irq < 0 && v == earliest_pt->vcpu )
+            goto rescan_locked;
+        pt_unlock(earliest_pt);
+        if ( irq < 0 )
+            goto rescan;
+    }
     else
     {
         hvm_isa_irq_deassert(v->domain, irq);
@@ -512,10 +548,10 @@ void pt_adjust_global_vcpu_target(struct vcpu *v)
     pt_adjust_vcpu(&pl_time->vrtc.pt, v);
     spin_unlock(&pl_time->vrtc.lock);
 
-    write_lock(&pl_time->vhpet.lock);
+    spin_lock(&pl_time->vhpet.lock);
     for ( i = 0; i < HPET_TIMER_NUM; i++ )
         pt_adjust_vcpu(&pl_time->vhpet.pt[i], v);
-    write_unlock(&pl_time->vhpet.lock);
+    spin_unlock(&pl_time->vhpet.lock);
 }
 
 

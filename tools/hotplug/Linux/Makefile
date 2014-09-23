@@ -2,17 +2,17 @@ XEN_ROOT = $(CURDIR)/../../..
 include $(XEN_ROOT)/tools/Rules.mk
 
 # Init scripts.
+XEND_INITD = init.d/xend
 XENDOMAINS_INITD = init.d/xendomains
-XENDOMAINS_LIBEXEC = xendomains
 XENDOMAINS_SYSCONFIG = init.d/sysconfig.xendomains
 
 XENCOMMONS_INITD = init.d/xencommons
 XENCOMMONS_SYSCONFIG = init.d/sysconfig.xencommons
 
 # Xen script dir and scripts to go there.
-XEN_SCRIPTS = vif-bridge
-XEN_SCRIPTS += vif-route
-XEN_SCRIPTS += vif-nat
+XEN_SCRIPTS = network-bridge vif-bridge
+XEN_SCRIPTS += network-route vif-route
+XEN_SCRIPTS += network-nat vif-nat
 XEN_SCRIPTS += vif-openvswitch
 XEN_SCRIPTS += vif2
 XEN_SCRIPTS += vif-setup
@@ -25,37 +25,31 @@ XEN_SCRIPTS += vscsi
 XEN_SCRIPTS += block-iscsi
 XEN_SCRIPTS += $(XEN_SCRIPTS-y)
 
-SUBDIRS-$(CONFIG_SYSTEMD) += systemd
-
 XEN_SCRIPT_DATA = xen-script-common.sh locking.sh logging.sh
 XEN_SCRIPT_DATA += xen-hotplug-common.sh xen-network-common.sh vif-common.sh
 XEN_SCRIPT_DATA += block-common.sh
 
 UDEV_RULES_DIR = $(CONFIG_DIR)/udev
+UDEV_RULES-$(CONFIG_XEND) = xend.rules
 UDEV_RULES = xen-backend.rules $(UDEV_RULES-y)
 
 .PHONY: all
-all: $(XENCOMMONS_INITD) subdirs-all
-
-$(XENCOMMONS_INITD): $(XEN_ROOT)/config/$(XEN_OS).modules $(XENCOMMONS_INITD).in
-	$(XEN_ROOT)/tools/hotplug/Linux/update-modules.sh \
-		$(XEN_ROOT) \
-		$(XEN_OS) \
-		$(XENCOMMONS_INITD) > $@
+all:
 
 .PHONY: build
-build: all
+build:
 
 .PHONY: install
-install: all install-initd install-scripts install-udev subdirs-install
+install: all install-initd install-scripts install-udev
 
 # See docs/misc/distro_mapping.txt for INITD_DIR location
 .PHONY: install-initd
-install-initd: all
+install-initd:
 	[ -d $(DESTDIR)$(INITD_DIR) ] || $(INSTALL_DIR) $(DESTDIR)$(INITD_DIR)
 	[ -d $(DESTDIR)$(SYSCONFIG_DIR) ] || $(INSTALL_DIR) $(DESTDIR)$(SYSCONFIG_DIR)
-	[ -d $(DESTDIR)$(LIBEXEC) ] || $(INSTALL_DIR) $(DESTDIR)$(LIBEXEC)
-	$(INSTALL_PROG) $(XENDOMAINS_LIBEXEC) $(DESTDIR)$(LIBEXEC)
+ifeq ($(CONFIG_XEND),y)
+	$(INSTALL_PROG) $(XEND_INITD) $(DESTDIR)$(INITD_DIR)
+endif
 	$(INSTALL_PROG) $(XENDOMAINS_INITD) $(DESTDIR)$(INITD_DIR)
 	$(INSTALL_DATA) $(XENDOMAINS_SYSCONFIG) $(DESTDIR)$(SYSCONFIG_DIR)/xendomains
 	$(INSTALL_PROG) $(XENCOMMONS_INITD) $(DESTDIR)$(INITD_DIR)
@@ -63,7 +57,7 @@ install-initd: all
 	$(INSTALL_PROG) init.d/xen-watchdog $(DESTDIR)$(INITD_DIR)
 
 .PHONY: install-scripts
-install-scripts: all
+install-scripts:
 	[ -d $(DESTDIR)$(XEN_SCRIPT_DIR) ] || \
 		$(INSTALL_DIR) $(DESTDIR)$(XEN_SCRIPT_DIR)
 	set -e; for i in $(XEN_SCRIPTS); \
@@ -85,4 +79,4 @@ install-udev:
 	done
 
 .PHONY: clean
-clean: subdirs-clean
+clean:

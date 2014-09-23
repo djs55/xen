@@ -28,10 +28,9 @@
 #include <asm/irq.h>
 #include <asm/cpufeature.h>
 #include <asm/vfp.h>
-#include <asm/procinfo.h>
+#include <asm/processor-ca15.h>
 
 #include <asm/gic.h>
-#include <asm/vgic.h>
 #include <asm/platform.h>
 #include "vtimer.h"
 #include "vuart.h"
@@ -48,7 +47,7 @@ void idle_loop(void)
         local_irq_disable();
         if ( cpu_is_haltable(smp_processor_id()) )
         {
-            dsb(sy);
+            dsb();
             wfi();
         }
         local_irq_enable();
@@ -60,18 +59,11 @@ void idle_loop(void)
 
 static void ctxt_switch_from(struct vcpu *p)
 {
-    /* When the idle VCPU is running, Xen will always stay in hypervisor
-     * mode. Therefore we don't need to save the context of an idle VCPU.
-     */
-    if ( is_idle_vcpu(p) )
-        goto end_context;
-
-    p2m_save_state(p);
-
     /* CP 15 */
     p->arch.csselr = READ_SYSREG(CSSELR_EL1);
 
     /* Control Registers */
+    p->arch.sctlr = READ_SYSREG(SCTLR_EL1);
     p->arch.cpacr = READ_SYSREG(CPACR_EL1);
 
     p->arch.contextidr = READ_SYSREG(CONTEXTIDR_EL1);
@@ -80,10 +72,9 @@ static void ctxt_switch_from(struct vcpu *p)
     p->arch.tpidr_el1 = READ_SYSREG(TPIDR_EL1);
 
     /* Arch timer */
-    p->arch.cntkctl = READ_SYSREG32(CNTKCTL_EL1);
     virt_timer_save(p);
 
-    if ( is_32bit_domain(p->domain) && cpu_has_thumbee )
+    if ( is_pv32_domain(p->domain) && cpu_has_thumbee )
     {
         p->arch.teecr = READ_SYSREG32(TEECR32_EL1);
         p->arch.teehbr = READ_SYSREG32(TEEHBR32_EL1);
@@ -101,7 +92,7 @@ static void ctxt_switch_from(struct vcpu *p)
     p->arch.ttbcr = READ_SYSREG(TCR_EL1);
     p->arch.ttbr0 = READ_SYSREG64(TTBR0_EL1);
     p->arch.ttbr1 = READ_SYSREG64(TTBR1_EL1);
-    if ( is_32bit_domain(p->domain) )
+    if ( is_pv32_domain(p->domain) )
         p->arch.dacr = READ_SYSREG(DACR32_EL2);
     p->arch.par = READ_SYSREG64(PAR_EL1);
 #if defined(CONFIG_ARM_32)
@@ -124,7 +115,7 @@ static void ctxt_switch_from(struct vcpu *p)
     p->arch.esr = READ_SYSREG64(ESR_EL1);
 #endif
 
-    if ( is_32bit_domain(p->domain) )
+    if ( is_pv32_domain(p->domain) )
         p->arch.ifsr  = READ_SYSREG(IFSR32_EL2);
     p->arch.afsr0 = READ_SYSREG(AFSR0_EL1);
     p->arch.afsr1 = READ_SYSREG(AFSR1_EL1);
@@ -138,20 +129,19 @@ static void ctxt_switch_from(struct vcpu *p)
     gic_save_state(p);
 
     isb();
-
-end_context:
     context_saved(p);
 }
 
 static void ctxt_switch_to(struct vcpu *n)
 {
-    /* When the idle VCPU is running, Xen will always stay in hypervisor
-     * mode. Therefore we don't need to restore the context of an idle VCPU.
-     */
-    if ( is_idle_vcpu(n) )
-        return;
+    register_t hcr;
 
-    p2m_restore_state(n);
+    hcr = READ_SYSREG(HCR_EL2);
+    WRITE_SYSREG(hcr & ~HCR_VM, HCR_EL2);
+    isb();
+
+    p2m_load_VTTBR(n->domain);
+    isb();
 
     WRITE_SYSREG32(n->domain->arch.vpidr, VPIDR_EL2);
     WRITE_SYSREG(n->arch.vmpidr, VMPIDR_EL2);
@@ -174,7 +164,7 @@ static void ctxt_switch_to(struct vcpu *n)
     WRITE_SYSREG64(n->arch.esr, ESR_EL1);
 #endif
 
-    if ( is_32bit_domain(n->domain) )
+    if ( is_pv32_domain(n->domain) )
         WRITE_SYSREG(n->arch.ifsr, IFSR32_EL2);
     WRITE_SYSREG(n->arch.afsr0, AFSR0_EL1);
     WRITE_SYSREG(n->arch.afsr1, AFSR1_EL1);
@@ -184,7 +174,7 @@ static void ctxt_switch_to(struct vcpu *n)
     WRITE_SYSREG(n->arch.ttbcr, TCR_EL1);
     WRITE_SYSREG64(n->arch.ttbr0, TTBR0_EL1);
     WRITE_SYSREG64(n->arch.ttbr1, TTBR1_EL1);
-    if ( is_32bit_domain(n->domain) )
+    if ( is_pv32_domain(n->domain) )
         WRITE_SYSREG(n->arch.dacr, DACR32_EL2);
     WRITE_SYSREG64(n->arch.par, PAR_EL1);
 #if defined(CONFIG_ARM_32)
@@ -199,6 +189,7 @@ static void ctxt_switch_to(struct vcpu *n)
     isb();
 
     /* Control Registers */
+    WRITE_SYSREG(n->arch.sctlr, SCTLR_EL1);
     WRITE_SYSREG(n->arch.cpacr, CPACR_EL1);
 
     WRITE_SYSREG(n->arch.contextidr, CONTEXTIDR_EL1);
@@ -206,7 +197,7 @@ static void ctxt_switch_to(struct vcpu *n)
     WRITE_SYSREG(n->arch.tpidrro_el0, TPIDRRO_EL0);
     WRITE_SYSREG(n->arch.tpidr_el1, TPIDR_EL1);
 
-    if ( is_32bit_domain(n->domain) && cpu_has_thumbee )
+    if ( is_pv32_domain(n->domain) && cpu_has_thumbee )
     {
         WRITE_SYSREG32(n->arch.teecr, TEECR32_EL1);
         WRITE_SYSREG32(n->arch.teehbr, TEEHBR32_EL1);
@@ -223,9 +214,16 @@ static void ctxt_switch_to(struct vcpu *n)
 
     isb();
 
+    if ( is_pv32_domain(n->domain) )
+        hcr &= ~HCR_RW;
+    else
+        hcr |= HCR_RW;
+
+    WRITE_SYSREG(hcr, HCR_EL2);
+    isb();
+
     /* This is could trigger an hardware interrupt from the virtual
      * timer. The interrupt needs to be injected into the guest. */
-    WRITE_SYSREG32(n->arch.cntkctl, CNTKCTL_EL1);
     virt_timer_restore(n);
 }
 
@@ -259,7 +257,7 @@ static void continue_new_vcpu(struct vcpu *prev)
 
     if ( is_idle_vcpu(current) )
         reset_stack_and_jump(idle_loop);
-    else if ( is_32bit_domain(current->domain) )
+    else if is_pv32_domain(current->domain)
         /* check_wakeup_from_wait(); */
         reset_stack_and_jump(return_to_new_vcpu32);
     else
@@ -409,7 +407,7 @@ struct domain *alloc_domain_struct(void)
         return NULL;
 
     clear_page(d);
-    d->arch.grant_table_gpfn = xzalloc_array(xen_pfn_t, max_nr_grant_frames);
+    d->arch.grant_table_gpfn = xmalloc_array(xen_pfn_t, max_nr_grant_frames);
     return d;
 }
 
@@ -482,25 +480,24 @@ int vcpu_initialise(struct vcpu *v)
 
     v->arch.actlr = READ_SYSREG32(ACTLR_EL1);
 
-    processor_vcpu_initialise(v);
+    /* XXX: Handle other than CA15 cpus */
+    if ( v->domain->max_vcpus > 1 )
+        v->arch.actlr |= ACTLR_CA15_SMP;
+    else
+        v->arch.actlr &= ~ACTLR_CA15_SMP;
 
     if ( (rc = vcpu_vgic_init(v)) != 0 )
-        goto fail;
+        return rc;
 
     if ( (rc = vcpu_vtimer_init(v)) != 0 )
-        goto fail;
+        return rc;
 
-    return rc;
-
-fail:
-    vcpu_destroy(v);
     return rc;
 }
 
 void vcpu_destroy(struct vcpu *v)
 {
     vcpu_timer_destroy(v);
-    vcpu_vgic_free(v);
     free_xenheap_pages(v->arch.stack, STACK_ORDER);
 }
 
@@ -528,9 +525,6 @@ int arch_domain_create(struct domain *d, unsigned int domcr_flags)
     share_xen_page_with_guest(
         virt_to_page(d->shared_info), d, XENSHARE_writable);
 
-    if ( (rc = domain_io_init(d)) != 0 )
-        goto fail;
-
     if ( (rc = p2m_alloc_table(d)) != 0 )
         goto fail;
 
@@ -540,7 +534,7 @@ int arch_domain_create(struct domain *d, unsigned int domcr_flags)
     if ( (rc = domain_vgic_init(d)) != 0 )
         goto fail;
 
-    if ( (rc = domain_vtimer_init(d)) != 0 )
+    if ( (rc = vcpu_domain_init(d)) != 0 )
         goto fail;
 
     if ( d->domain_id )
@@ -550,13 +544,10 @@ int arch_domain_create(struct domain *d, unsigned int domcr_flags)
 
     /*
      * Virtual UART is only used by linux early printk and decompress code.
-     * Only use it for the hardware domain because the linux kernel may not
-     * support multi-platform.
+     * Only use it for dom0 because the linux kernel may not support
+     * multi-platform.
      */
-    if ( is_hardware_domain(d) && (rc = domain_vuart_init(d)) )
-        goto fail;
-
-    if ( (rc = iommu_domain_init(d)) != 0 )
+    if ( (d->domain_id == 0) && (rc = domain_vuart_init(d)) )
         goto fail;
 
     return 0;
@@ -570,10 +561,6 @@ fail:
 
 void arch_domain_destroy(struct domain *d)
 {
-    /* IOMMU page table is shared with P2M, always call
-     * iommu_domain_destroy() before p2m_teardown().
-     */
-    iommu_domain_destroy(d);
     p2m_teardown(d);
     domain_vgic_free(d);
     domain_vuart_free(d);
@@ -633,7 +620,7 @@ int arch_set_info_guest(
     struct vcpu_guest_context *ctxt = c.nat;
     struct vcpu_guest_core_regs *regs = &c.nat->user_regs;
 
-    if ( is_32bit_domain(v->domain) )
+    if ( is_pv32_domain(v->domain) )
     {
         if ( !is_guest_pv32_psr(regs->cpsr) )
             return -EINVAL;
@@ -705,7 +692,7 @@ static int relinquish_memory(struct domain *d, struct page_list_head *list)
 
         if ( hypercall_preempt_check() )
         {
-            ret = -ERESTART;
+            ret = -EAGAIN;
             goto out;
         }
     }
@@ -761,7 +748,12 @@ int domain_relinquish_resources(struct domain *d)
 
 void arch_dump_domain_info(struct domain *d)
 {
-    p2m_dump_info(d);
+    struct vcpu *v;
+
+    for_each_vcpu ( d, v )
+    {
+        gic_dump_info(v);
+    }
 }
 
 
@@ -784,7 +776,6 @@ long arch_do_vcpu_op(int cmd, struct vcpu *v, XEN_GUEST_HANDLE_PARAM(void) arg)
 
 void arch_dump_vcpu_info(struct vcpu *v)
 {
-    gic_dump_info(v);
 }
 
 void vcpu_mark_events_pending(struct vcpu *v)
@@ -795,20 +786,7 @@ void vcpu_mark_events_pending(struct vcpu *v)
     if ( already_pending )
         return;
 
-    vgic_vcpu_inject_irq(v, v->domain->arch.evtchn_irq);
-}
-
-/* The ARM spec declares that even if local irqs are masked in
- * the CPSR register, an irq should wake up a cpu from WFI anyway.
- * For this reason we need to check for irqs that need delivery,
- * ignoring the CPSR register, *after* calling SCHEDOP_block to
- * avoid races with vgic_vcpu_inject_irq.
- */
-void vcpu_block_unless_event_pending(struct vcpu *v)
-{
-    vcpu_block();
-    if ( local_events_need_delivery_nomask() )
-        vcpu_unblock(current);
+    vgic_vcpu_inject_irq(v, v->domain->arch.evtchn_irq, 1);
 }
 
 /*

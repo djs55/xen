@@ -15,17 +15,17 @@
 #include <xen/xenoprof.h>
 #include <xen/guest_access.h>
 
-struct __packed frame_head {
+struct frame_head {
     struct frame_head * ebp;
     unsigned long ret;
-};
+} __attribute__((packed));
 typedef struct frame_head frame_head_t;
 DEFINE_XEN_GUEST_HANDLE(frame_head_t);
 
-struct __packed frame_head_32bit {
+struct frame_head_32bit {
     uint32_t ebp;
     uint32_t ret;
-};
+} __attribute__((packed));
 typedef struct frame_head_32bit frame_head32_t;
 DEFINE_COMPAT_HANDLE(frame_head32_t);
 

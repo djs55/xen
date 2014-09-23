@@ -32,7 +32,8 @@ static int __init smp_spin_table_cpu_up(int cpu)
         return -EFAULT;
     }
 
-    writeq(__pa(init_secondary), release);
+    release[0] = __pa(init_secondary);
+    flush_xen_data_tlb_range_va((vaddr_t)release, sizeof(*release));
 
     iounmap(release);
 

@@ -12,6 +12,7 @@ CFLAGS            += -Werror
 CFLAGS            += -Wno-unused
 CFLAGS            += -I../include
 CFLAGS            += -D_GNU_SOURCE
+CFLAGS  += $(CFLAGS_libxenctrl)
 
 ifeq ($(CONFIG_X86_64),y)
 CFLAGS            += -fPIC
@@ -31,10 +32,10 @@ LIBS_DEPENDS	  := lib/libvhd.so lib/vhd.a
 $(LIBS_DEPENDS):subdirs-all
 
 vhd-util: vhd-util.o $(LIBS_DEPENDS)
-	$(CC) $(LDFLAGS) -o vhd-util vhd-util.o $(LIBS) $(APPEND_LDFLAGS)
+	$(CC) $(LDFLAGS) -o vhd-util vhd-util.o $(LIBS)
 
 vhd-update: vhd-update.o $(LIBS_DEPENDS)
-	$(CC) $(LDFLAGS) -o vhd-update vhd-update.o $(LIBS) $(APPEND_LDFLAGS)
+	$(CC) $(LDFLAGS) -o vhd-update vhd-update.o $(LIBS)
 
 install: all
 	$(MAKE) subdirs-install

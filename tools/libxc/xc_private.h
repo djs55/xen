@@ -34,18 +34,22 @@
 
 #include <xen/sys/privcmd.h>
 
-#if defined(HAVE_VALGRIND_MEMCHECK_H) && !defined(NDEBUG) && !defined(__MINIOS__)
-/* Compile in Valgrind client requests? */
-#include <valgrind/memcheck.h>
+/* valgrind cannot see when a hypercall has filled in some values.  For this
+   reason, we must zero the privcmd_hypercall_t or domctl/sysctl instance
+   before a call, if using valgrind.  */
+#ifdef VALGRIND
+#define DECLARE_HYPERCALL privcmd_hypercall_t hypercall = { 0 }
+#define DECLARE_DOMCTL struct xen_domctl domctl = { 0 }
+#define DECLARE_SYSCTL struct xen_sysctl sysctl = { 0 }
+#define DECLARE_PHYSDEV_OP struct physdev_op physdev_op = { 0 }
+#define DECLARE_FLASK_OP struct xen_flask_op op = { 0 }
 #else
-#define VALGRIND_MAKE_MEM_UNDEFINED(addr, len) /* addr, len */
-#endif
-
 #define DECLARE_HYPERCALL privcmd_hypercall_t hypercall
 #define DECLARE_DOMCTL struct xen_domctl domctl
 #define DECLARE_SYSCTL struct xen_sysctl sysctl
 #define DECLARE_PHYSDEV_OP struct physdev_op physdev_op
 #define DECLARE_FLASK_OP struct xen_flask_op op
+#endif
 
 #undef PAGE_SHIFT
 #undef PAGE_SIZE
@@ -55,16 +59,7 @@
 #define PAGE_MASK               XC_PAGE_MASK
 
 /* Force a compilation error if condition is true */
-#if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6)
-#define XC_BUILD_BUG_ON(p) ({ _Static_assert(!(p), "!(" #p ")"); })
-#else
 #define XC_BUILD_BUG_ON(p) ((void)sizeof(struct { int:-!!(p); }))
-#endif
-
-#ifndef ARRAY_SIZE /* MiniOS leaks ARRAY_SIZE into our namespace as part of a
-                    * stubdom build.  It shouldn't... */
-#define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
-#endif
 
 /*
 ** Define max dirty page cache to permit during save/restore -- need to balance 
@@ -109,8 +104,7 @@ struct xc_interface_core {
     xc_osdep_handle  ops_handle; /* opaque data for xc_osdep_ops */
 };
 
-void xc_report_error(xc_interface *xch, int code, const char *fmt, ...)
-    __attribute__((format(printf,3,4)));
+void xc_report_error(xc_interface *xch, int code, const char *fmt, ...);
 void xc_reportv(xc_interface *xch, xentoollog_logger *lg, xentoollog_level,
                 int code, const char *fmt, va_list args)
      __attribute__((format(printf,5,0)));
@@ -125,28 +119,13 @@ void xc_report_progress_step(xc_interface *xch,
 
 /* anamorphic macros:  struct xc_interface *xch  must be in scope */
 
-#define IPRINTF(_f, _a...)  do { int IPRINTF_errno = errno; \
-        xc_report(xch, xch->error_handler, XTL_INFO,0, _f , ## _a); \
-        errno = IPRINTF_errno; \
-        } while (0)
-#define DPRINTF(_f, _a...) do { int DPRINTF_errno = errno; \
-        xc_report(xch, xch->error_handler, XTL_DETAIL,0, _f , ## _a); \
-        errno = DPRINTF_errno; \
-        } while (0)
-#define DBGPRINTF(_f, _a...)  do { int DBGPRINTF_errno = errno; \
-        xc_report(xch, xch->error_handler, XTL_DEBUG,0, _f , ## _a); \
-        errno = DBGPRINTF_errno; \
-        } while (0)
+#define IPRINTF(_f, _a...) xc_report(xch, xch->error_handler, XTL_INFO,0, _f , ## _a)
+#define DPRINTF(_f, _a...) xc_report(xch, xch->error_handler, XTL_DETAIL,0, _f , ## _a)
+#define DBGPRINTF(_f, _a...) xc_report(xch, xch->error_handler, XTL_DEBUG,0, _f , ## _a)
 
-#define ERROR(_m, _a...)  do { int ERROR_errno = errno; \
-        xc_report_error(xch,XC_INTERNAL_ERROR,_m , ## _a ); \
-        errno = ERROR_errno; \
-        } while (0)
-#define PERROR(_m, _a...) do { int PERROR_errno = errno; \
-        xc_report_error(xch,XC_INTERNAL_ERROR,_m " (%d = %s)", \
-        ## _a , errno, xc_strerror(xch, errno)); \
-        errno = PERROR_errno; \
-        } while (0)
+#define ERROR(_m, _a...)  xc_report_error(xch,XC_INTERNAL_ERROR,_m , ## _a )
+#define PERROR(_m, _a...) xc_report_error(xch,XC_INTERNAL_ERROR,_m \
+                  " (%d = %s)", ## _a , errno, xc_strerror(xch, errno))
 
 /*
  * HYPERCALL ARGUMENT BUFFERS
@@ -349,38 +328,7 @@ int xc_ffs16(uint16_t x);
 int xc_ffs32(uint32_t x);
 int xc_ffs64(uint64_t x);
 
-#define min(X, Y) ({                             \
-            const typeof (X) _x = (X);           \
-            const typeof (Y) _y = (Y);           \
-            (void) (&_x == &_y);                 \
-            (_x < _y) ? _x : _y; })
-#define max(X, Y) ({                             \
-            const typeof (X) _x = (X);           \
-            const typeof (Y) _y = (Y);           \
-            (void) (&_x == &_y);                 \
-            (_x > _y) ? _x : _y; })
-
-#define min_t(type,x,y) \
-        ({ type __x = (x); type __y = (y); __x < __y ? __x: __y; })
-#define max_t(type,x,y) \
-        ({ type __x = (x); type __y = (y); __x > __y ? __x: __y; })
-
 #define DOMPRINTF(fmt, args...) xc_dom_printf(dom->xch, fmt, ## args)
 #define DOMPRINTF_CALLED(xch) xc_dom_printf((xch), "%s: called", __FUNCTION__)
-
-/**
- * mem_event operations. Internal use only.
- */
-int xc_mem_event_control(xc_interface *xch, domid_t domain_id, unsigned int op,
-                         unsigned int mode, uint32_t *port);
-int xc_mem_event_memop(xc_interface *xch, domid_t domain_id,
-                        unsigned int op, unsigned int mode,
-                        uint64_t gfn, void *buffer);
-/*
- * Enables mem_event and returns the mapped ring page indicated by param.
- * param can be HVM_PARAM_PAGING/ACCESS/SHARING_RING_PFN
- */
-void *xc_mem_event_enable(xc_interface *xch, domid_t domain_id, int param,
-                          uint32_t *port, int enable_introspection);
 
 #endif /* __XC_PRIVATE_H__ */

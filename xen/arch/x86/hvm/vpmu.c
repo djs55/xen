@@ -64,12 +64,12 @@ static void __init parse_vpmu_param(char *s)
     }
 }
 
-int vpmu_do_wrmsr(unsigned int msr, uint64_t msr_content, uint64_t supported)
+int vpmu_do_wrmsr(unsigned int msr, uint64_t msr_content)
 {
     struct vpmu_struct *vpmu = vcpu_vpmu(current);
 
     if ( vpmu->arch_vpmu_ops && vpmu->arch_vpmu_ops->do_wrmsr )
-        return vpmu->arch_vpmu_ops->do_wrmsr(msr, msr_content, supported);
+        return vpmu->arch_vpmu_ops->do_wrmsr(msr, msr_content);
     return 0;
 }
 
@@ -211,9 +211,10 @@ void vpmu_load(struct vcpu *v)
     if ( vpmu->arch_vpmu_ops && vpmu->arch_vpmu_ops->arch_vpmu_load )
     {
         apic_write_around(APIC_LVTPC, vpmu->hw_lapic_lvtpc);
-        /* Arch code needs to set VPMU_CONTEXT_LOADED */
         vpmu->arch_vpmu_ops->arch_vpmu_load(v);
     }
+
+    vpmu_set(vpmu, VPMU_CONTEXT_LOADED);
 }
 
 void vpmu_initialise(struct vcpu *v)

@@ -15,9 +15,7 @@
 #include "libxl_osdeps.h" /* must come before any other headers */
 
 #include <termios.h>
-#ifdef HAVE_UTMP_H
 #include <utmp.h>
-#endif
 
 #ifdef INCLUDE_LIBUTIL_H
 #include INCLUDE_LIBUTIL_H
@@ -58,12 +56,12 @@ static void make_bootloader_args(libxl__gc *gc, libxl__bootloader_state *bl,
 
     ARG(bootloader_path);
 
-    if (info->kernel)
-        ARG(libxl__sprintf(gc, "--kernel=%s", info->kernel));
-    if (info->ramdisk)
-        ARG(libxl__sprintf(gc, "--ramdisk=%s", info->ramdisk));
-    if (info->cmdline && *info->cmdline != '\0')
-        ARG(libxl__sprintf(gc, "--args=%s", info->cmdline));
+    if (info->u.pv.kernel)
+        ARG(libxl__sprintf(gc, "--kernel=%s", info->u.pv.kernel));
+    if (info->u.pv.ramdisk)
+        ARG(libxl__sprintf(gc, "--ramdisk=%s", info->u.pv.ramdisk));
+    if (info->u.pv.cmdline && *info->u.pv.cmdline != '\0')
+        ARG(libxl__sprintf(gc, "--args=%s", info->u.pv.cmdline));
 
     ARG(libxl__sprintf(gc, "--output=%s", bl->outputpath));
     ARG("--output-format=simple0");
@@ -327,9 +325,9 @@ void libxl__bootloader_run(libxl__egc *egc, libxl__bootloader_state *bl)
 
     if (!info->u.pv.bootloader) {
         LOG(DEBUG, "no bootloader configured, using user supplied kernel");
-        bl->kernel->path = bl->info->kernel;
-        bl->ramdisk->path = bl->info->ramdisk;
-        bl->cmdline = bl->info->cmdline;
+        bl->kernel->path = bl->info->u.pv.kernel;
+        bl->ramdisk->path = bl->info->u.pv.ramdisk;
+        bl->cmdline = bl->info->u.pv.cmdline;
         rc = 0;
         goto out_ok;
     }

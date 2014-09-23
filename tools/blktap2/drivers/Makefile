@@ -9,7 +9,7 @@ QCOW_UTIL  = img2qcow qcow-create qcow2raw
 LOCK_UTIL  = lock-util
 INST_DIR   = $(SBINDIR)
 
-CFLAGS    += -Werror
+CFLAGS    += -Werror -g
 CFLAGS    += -Wno-unused
 CFLAGS    += -fno-strict-aliasing
 CFLAGS    += -I$(BLKTAP_ROOT)/include -I$(BLKTAP_ROOT)/drivers
@@ -79,25 +79,25 @@ all: $(IBIN) lock-util qcow-util
 
 
 tapdisk2: $(TAP-OBJS-y) $(BLK-OBJS-y) $(MISC-OBJS-y) tapdisk2.o
-	$(CC) -o $@ $^ $(LDFLAGS) -lrt -lz $(VHDLIBS) $(AIOLIBS) $(MEMSHRLIBS) -lm  $(APPEND_LDFLAGS)
+	$(CC) -o $@ $^ $(LDFLAGS) -lrt -lz $(VHDLIBS) $(AIOLIBS) $(MEMSHRLIBS) -lm 
 
 tapdisk-client: tapdisk-client.o
-	$(CC) -o $@ $^ $(LDFLAGS) -lrt $(APPEND_LDFLAGS)
+	$(CC) -o $@ $^ $(LDFLAGS) -lrt
 
 tapdisk-stream tapdisk-diff: %: %.o $(TAP-OBJS-y) $(BLK-OBJS-y)
-	$(CC) -o $@ $^ $(LDFLAGS) -lrt -lz $(VHDLIBS) $(AIOLIBS) $(MEMSHRLIBS) -lm $(APPEND_LDFLAGS)
+	$(CC) -o $@ $^ $(LDFLAGS) -lrt -lz $(VHDLIBS) $(AIOLIBS) $(MEMSHRLIBS) -lm
 
 td-util: td.o tapdisk-utils.o tapdisk-log.o $(PORTABLE-OBJS-y)
-	$(CC) -o $@ $^ $(LDFLAGS) $(VHDLIBS) $(APPEND_LDFLAGS)
+	$(CC) -o $@ $^ $(LDFLAGS) $(VHDLIBS)
 
 lock-util: lock.c
-	$(CC) $(CFLAGS) -DUTIL -o lock-util lock.c $(LDFLAGS) $(APPEND_LDFLAGS)
+	$(CC) $(CFLAGS) -DUTIL -o lock-util lock.c $(LDFLAGS)
 
 .PHONY: qcow-util
 qcow-util: img2qcow qcow2raw qcow-create
 
 img2qcow qcow2raw qcow-create: %: %.o $(TAP-OBJS-y) $(BLK-OBJS-y)
-	$(CC) -o $@ $^ $(LDFLAGS) -lrt -lz $(VHDLIBS) $(AIOLIBS) $(MEMSHRLIBS) -lm $(APPEND_LDFLAGS)
+	$(CC) -o $@ $^ $(LDFLAGS) -lrt -lz $(VHDLIBS) $(AIOLIBS) $(MEMSHRLIBS) -lm
 
 install: all
 	$(INSTALL_DIR) -p $(DESTDIR)$(INST_DIR)

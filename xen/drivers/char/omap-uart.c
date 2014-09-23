@@ -15,6 +15,7 @@
 #include <xen/serial.h>
 #include <xen/init.h>
 #include <xen/irq.h>
+#include <asm/early_printk.h>
 #include <xen/device_tree.h>
 #include <asm/device.h>
 #include <xen/errno.h>
@@ -30,7 +31,7 @@
 
 static struct omap_uart {
     u32 baud, clock_hz, data_bits, parity, stop_bits, fifo_size;
-    unsigned int irq;
+    struct dt_irq irq;
     char __iomem *regs;
     struct irqaction irqaction;
     struct vuart_info vuart;
@@ -205,10 +206,10 @@ static void __init omap_uart_init_postirq(struct serial_port *port)
     uart->irqaction.name = "omap_uart";
     uart->irqaction.dev_id = port;
 
-    if ( setup_irq(uart->irq, 0, &uart->irqaction) != 0 )
+    if ( setup_dt_irq(&uart->irq, &uart->irqaction) != 0 )
     {
         dprintk(XENLOG_ERR, "Failed to allocated omap_uart IRQ %d\n",
-                uart->irq);
+                uart->irq.irq);
         return;
     }
 
@@ -259,7 +260,14 @@ static int __init omap_uart_irq(struct serial_port *port)
 {
     struct omap_uart *uart = port->uart;
 
-    return ((uart->irq > 0) ? uart->irq : -1);
+    return ((uart->irq.irq > 0) ? uart->irq.irq : -1);
+}
+
+static const struct dt_irq __init *omap_uart_dt_irq(struct serial_port *port)
+{
+    struct omap_uart *uart = port->uart;
+
+    return &uart->irq;
 }
 
 static const struct vuart_info *omap_vuart_info(struct serial_port *port)
@@ -279,6 +287,7 @@ static struct uart_driver __read_mostly omap_uart_driver = {
     .putc = omap_uart_putc,
     .getc = omap_uart_getc,
     .irq = omap_uart_irq,
+    .dt_irq_get = omap_uart_dt_irq,
     .vuart_info = omap_vuart_info,
 };
 
@@ -292,14 +301,14 @@ static int __init omap_uart_init(struct dt_device_node *dev,
     u64 addr, size;
 
     if ( strcmp(config, "") )
-        printk("WARNING: UART configuration is not supported\n");
+        early_printk("WARNING: UART configuration is not supported\n");
 
     uart = &omap_com;
 
     res = dt_property_read_u32(dev, "clock-frequency", &clkspec);
     if ( !res )
     {
-        printk("omap-uart: Unable to retrieve the clock frequency\n");
+        early_printk("omap-uart: Unable to retrieve the clock frequency\n");
         return -EINVAL;
     }
 
@@ -312,26 +321,24 @@ static int __init omap_uart_init(struct dt_device_node *dev,
     res = dt_device_get_address(dev, 0, &addr, &size);
     if ( res )
     {
-        printk("omap-uart: Unable to retrieve the base"
-               " address of the UART\n");
+        early_printk("omap-uart: Unable to retrieve the base"
+                     " address of the UART\n");
         return res;
     }
 
-    res = platform_get_irq(dev, 0);
-    if ( res < 0 )
-    {
-        printk("omap-uart: Unable to retrieve the IRQ\n");
-        return -EINVAL;
-    }
-    uart->irq = res;
-
-    uart->regs = ioremap_nocache(addr, size);
+    uart->regs = ioremap_attr(addr, size, PAGE_HYPERVISOR_NOCACHE);
     if ( !uart->regs )
     {
-        printk("omap-uart: Unable to map the UART memory\n");
+        early_printk("omap-uart: Unable to map the UART memory\n");
         return -ENOMEM;
     }
 
+    res = dt_device_get_irq(dev, 0, &uart->irq);
+    if ( res )
+    {
+        early_printk("omap-uart: Unable to retrieve the IRQ\n");
+        return res;
+    }
 
     uart->vuart.base_addr = addr;
     uart->vuart.size = size;

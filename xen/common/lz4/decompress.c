@@ -84,8 +84,6 @@ static int INIT lz4_uncompress(const unsigned char *source, unsigned char *dest,
 			ip += length;
 			break; /* EOF */
 		}
-		if (unlikely((unsigned long)cpy < (unsigned long)op))
-			goto _output_error;
 		LZ4_WILDCOPY(ip, op, cpy);
 		ip -= (op - cpy);
 		op = cpy;
@@ -144,8 +142,6 @@ static int INIT lz4_uncompress(const unsigned char *source, unsigned char *dest,
 				goto _output_error;
 			continue;
 		}
-		if (unlikely((unsigned long)cpy < (unsigned long)op))
-			goto _output_error;
 		LZ4_SECURECOPY(ref, op, cpy);
 		op = cpy; /* correction */
 	}
@@ -211,8 +207,6 @@ static int lz4_uncompress_unknownoutputsize(const unsigned char *source,
 			op += length;
 			break;/* Necessarily EOF, due to parsing restrictions */
 		}
-		if (unlikely((unsigned long)cpy < (unsigned long)op))
-			goto _output_error;
 		LZ4_WILDCOPY(ip, op, cpy);
 		ip -= (op - cpy);
 		op = cpy;
@@ -276,8 +270,6 @@ static int lz4_uncompress_unknownoutputsize(const unsigned char *source,
 				goto _output_error;
 			continue;
 		}
-		if (unlikely((unsigned long)cpy < (unsigned long)op))
-			goto _output_error;
 		LZ4_SECURECOPY(ref, op, cpy);
 		op = cpy; /* correction */
 	}

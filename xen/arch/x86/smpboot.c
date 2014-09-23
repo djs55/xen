@@ -303,6 +303,15 @@ static void set_cpu_sibling_map(int cpu)
     }
 }
 
+static void construct_percpu_idt(unsigned int cpu)
+{
+    unsigned char idt_load[10];
+
+    *(unsigned short *)(&idt_load[0]) = (IDT_ENTRIES*sizeof(idt_entry_t))-1;
+    *(unsigned long  *)(&idt_load[2]) = (unsigned long)idt_tables[cpu];
+    __asm__ __volatile__ ( "lidt %0" : "=m" (idt_load) );
+}
+
 void start_secondary(void *unused)
 {
     /*
@@ -311,13 +320,12 @@ void start_secondary(void *unused)
      */
     unsigned int cpu = booting_cpu;
 
-    /* Critical region without IDT or TSS.  Any fault is deadly! */
-
     set_processor_id(cpu);
     set_current(idle_vcpu[cpu]);
     this_cpu(curr_vcpu) = idle_vcpu[cpu];
     if ( cpu_has_efer )
         rdmsrl(MSR_EFER, this_cpu(efer));
+    asm volatile ( "mov %%cr4,%0" : "=r" (this_cpu(cr4)) );
 
     /*
      * Just as during early bootstrap, it is convenient here to disable
@@ -337,20 +345,17 @@ void start_secondary(void *unused)
      */
     spin_debug_disable();
 
-    load_system_tables();
-
-    /* Full exception support from here on in. */
-
-    /* Safe to enable feature such as CR4.MCE with the IDT set up now. */
-    write_cr4(mmu_cr4_features);
-
     percpu_traps_init();
-
-    init_percpu_time();
 
     cpu_init();
 
     smp_callin();
+
+    /*
+     * At this point, boot CPU has fully initialised the IDT. It is
+     * now safe to make ourselves a private copy.
+     */
+    construct_percpu_idt(cpu);
 
     setup_secondary_APIC_clock();
 
@@ -375,6 +380,8 @@ void start_secondary(void *unused)
     __setup_vector_irq(cpu);
     cpumask_set_cpu(cpu, &cpu_online_map);
     unlock_vector_lock();
+
+    init_percpu_time();
 
     /* We can take interrupts now: we're officially "up". */
     local_irq_enable();

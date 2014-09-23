@@ -43,32 +43,7 @@ static DEFINE_PER_CPU(unsigned int, nmi_timer_ticks);
 
 /* opt_watchdog: If true, run a watchdog NMI on each processor. */
 bool_t __initdata opt_watchdog = 0;
-
-/* watchdog_force: If true, process unknown NMIs when running the watchdog. */
-bool_t watchdog_force = 0;
-
-static void __init parse_watchdog(char *s)
-{
-    if ( !*s )
-    {
-        opt_watchdog = 1;
-        return;
-    }
-
-    switch ( parse_bool(s) )
-    {
-    case 0:
-        opt_watchdog = 0;
-        return;
-    case 1:
-        opt_watchdog = 1;
-        return;
-    }
-
-    if ( !strcmp(s, "force") )
-        watchdog_force = opt_watchdog = 1;
-}
-custom_param("watchdog", parse_watchdog);
+boolean_param("watchdog", opt_watchdog);
 
 /* opt_watchdog_timeout: Number of seconds to wait before panic. */
 static unsigned int opt_watchdog_timeout = 5;
@@ -107,7 +82,6 @@ int nmi_active;
 #define K7_EVNTSEL_USR		(1 << 16)
 #define K7_EVENT_CYCLES_PROCESSOR_IS_RUNNING	0x76
 #define K7_NMI_EVENT		K7_EVENT_CYCLES_PROCESSOR_IS_RUNNING
-#define K7_EVENT_WIDTH          32
 
 #define P6_EVNTSEL0_ENABLE	(1 << 22)
 #define P6_EVNTSEL_INT		(1 << 20)
@@ -115,12 +89,10 @@ int nmi_active;
 #define P6_EVNTSEL_USR		(1 << 16)
 #define P6_EVENT_CPU_CLOCKS_NOT_HALTED	 0x79
 #define CORE_EVENT_CPU_CLOCKS_NOT_HALTED 0x3c
-#define P6_EVENT_WIDTH          32
 
 #define P4_ESCR_EVENT_SELECT(N)	((N)<<25)
 #define P4_CCCR_OVF_PMI0	(1<<26)
 #define P4_CCCR_OVF_PMI1	(1<<27)
-#define P4_CCCR_OVF		(1<<31)
 #define P4_CCCR_THRESHOLD(N)	((N)<<20)
 #define P4_CCCR_COMPLEMENT	(1<<19)
 #define P4_CCCR_COMPARE		(1<<18)
@@ -146,15 +118,15 @@ int __init check_nmi_watchdog (void)
 {
     static unsigned int __initdata prev_nmi_count[NR_CPUS];
     int cpu;
-    bool_t ok = 1;
-
+    
     if ( !nmi_watchdog )
         return 0;
 
-    printk("Testing NMI watchdog on all CPUs:");
+    printk("Testing NMI watchdog --- ");
 
     for_each_online_cpu ( cpu )
         prev_nmi_count[cpu] = nmi_count(cpu);
+    local_irq_enable();
 
     /* Wait for 10 ticks.  Busy-wait on all CPUs: the LAPIC counter that
      * the NMI watchdog uses only runs while the core's not halted */
@@ -165,13 +137,12 @@ int __init check_nmi_watchdog (void)
     for_each_online_cpu ( cpu )
     {
         if ( nmi_count(cpu) - prev_nmi_count[cpu] <= 5 )
-        {
-            printk(" %d", cpu);
-            ok = 0;
-        }
+            printk("CPU#%d stuck. ", cpu);
+        else
+            printk("CPU#%d okay. ", cpu);
     }
 
-    printk(" %s\n", ok ? "ok" : "stuck");
+    printk("\n");
 
     /*
      * Now that we know it works we can reduce NMI frequency to
@@ -205,7 +176,7 @@ void disable_lapic_nmi_watchdog(void)
     case X86_VENDOR_INTEL:
         switch (boot_cpu_data.x86) {
         case 6:
-            wrmsr(MSR_P6_EVNTSEL(0), 0, 0);
+            wrmsr(MSR_P6_EVNTSEL0, 0, 0);
             break;
         case 15:
             wrmsr(MSR_P4_IQ_CCCR0, 0, 0);
@@ -304,21 +275,21 @@ static void __pminit setup_p6_watchdog(unsigned counter)
 {
     unsigned int evntsel;
 
-    nmi_perfctr_msr = MSR_P6_PERFCTR(0);
+    nmi_perfctr_msr = MSR_P6_PERFCTR0;
 
-    clear_msr_range(MSR_P6_EVNTSEL(0), 2);
-    clear_msr_range(MSR_P6_PERFCTR(0), 2);
+    clear_msr_range(MSR_P6_EVNTSEL0, 2);
+    clear_msr_range(MSR_P6_PERFCTR0, 2);
 
     evntsel = P6_EVNTSEL_INT
         | P6_EVNTSEL_OS
         | P6_EVNTSEL_USR
         | counter;
 
-    wrmsr(MSR_P6_EVNTSEL(0), evntsel, 0);
+    wrmsr(MSR_P6_EVNTSEL0, evntsel, 0);
     write_watchdog_counter("P6_PERFCTR0");
     apic_write(APIC_LVTPC, APIC_DM_NMI);
     evntsel |= P6_EVNTSEL0_ENABLE;
-    wrmsr(MSR_P6_EVNTSEL(0), evntsel, 0);
+    wrmsr(MSR_P6_EVNTSEL0, evntsel, 0);
 }
 
 static int __pminit setup_p4_watchdog(void)
@@ -460,10 +431,8 @@ int __init watchdog_setup(void)
     return 0;
 }
 
-/* Returns false if this was not a watchdog NMI, true otherwise */
-bool_t nmi_watchdog_tick(const struct cpu_user_regs *regs)
+void nmi_watchdog_tick(struct cpu_user_regs * regs)
 {
-    bool_t watchdog_tick = 1;
     unsigned int sum = this_cpu(nmi_timer_ticks);
 
     if ( (this_cpu(last_irq_sums) == sum) && watchdog_enabled() )
@@ -478,7 +447,7 @@ bool_t nmi_watchdog_tick(const struct cpu_user_regs *regs)
             console_force_unlock();
             printk("Watchdog timer detects that CPU%d is stuck!\n",
                    smp_processor_id());
-            fatal_trap(regs);
+            fatal_trap(TRAP_nmi, regs);
         }
     } 
     else 
@@ -489,15 +458,8 @@ bool_t nmi_watchdog_tick(const struct cpu_user_regs *regs)
 
     if ( nmi_perfctr_msr )
     {
-        uint64_t msr_content;
-
-        /* Work out if this is a watchdog tick by checking for overflow. */
         if ( nmi_perfctr_msr == MSR_P4_IQ_PERFCTR0 )
         {
-            rdmsrl(MSR_P4_IQ_CCCR0, msr_content);
-            if ( !(msr_content & P4_CCCR_OVF) )
-                watchdog_tick = 0;
-
             /*
              * P4 quirks:
              * - An overflown perfctr will assert its interrupt
@@ -508,28 +470,16 @@ bool_t nmi_watchdog_tick(const struct cpu_user_regs *regs)
             wrmsrl(MSR_P4_IQ_CCCR0, nmi_p4_cccr_val);
             apic_write(APIC_LVTPC, APIC_DM_NMI);
         }
-        else if ( nmi_perfctr_msr == MSR_P6_PERFCTR(0) )
+        else if ( nmi_perfctr_msr == MSR_P6_PERFCTR0 )
         {
-            rdmsrl(MSR_P6_PERFCTR(0), msr_content);
-            if ( msr_content & (1ULL << P6_EVENT_WIDTH) )
-                watchdog_tick = 0;
-
             /*
              * Only P6 based Pentium M need to re-unmask the apic vector but
              * it doesn't hurt other P6 variants.
              */
             apic_write(APIC_LVTPC, APIC_DM_NMI);
         }
-        else if ( nmi_perfctr_msr == MSR_K7_PERFCTR0 )
-        {
-            rdmsrl(MSR_K7_PERFCTR0, msr_content);
-            if ( msr_content & (1ULL << K7_EVENT_WIDTH) )
-                watchdog_tick = 0;
-        }
         write_watchdog_counter(NULL);
     }
-
-    return watchdog_tick;
 }
 
 /*
@@ -569,7 +519,7 @@ static void do_nmi_stats(unsigned char key)
     for_each_online_cpu ( i )
         printk("%3d\t%3d\n", i, nmi_count(i));
 
-    if ( ((d = hardware_domain) == NULL) || (d->vcpu == NULL) ||
+    if ( ((d = dom0) == NULL) || (d->vcpu == NULL) ||
          ((v = d->vcpu[0]) == NULL) )
         return;
 

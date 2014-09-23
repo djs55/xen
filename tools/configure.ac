@@ -5,20 +5,7 @@ AC_PREREQ([2.67])
 AC_INIT([Xen Hypervisor Tools], m4_esyscmd([../version.sh ../xen/Makefile]),
     [xen-devel@lists.xen.org], [xen], [http://www.xen.org/])
 AC_CONFIG_SRCDIR([libxl/libxl.c])
-AC_CONFIG_FILES([
-../config/Tools.mk
-hotplug/Linux/init.d/xencommons.in
-hotplug/Linux/init.d/sysconfig.xencommons
-hotplug/Linux/systemd/proc-xen.mount
-hotplug/Linux/systemd/var-lib-xenstored.mount
-hotplug/Linux/systemd/xenstored.socket
-hotplug/Linux/systemd/xenstored_ro.socket
-hotplug/Linux/systemd/xenstored.service
-hotplug/Linux/systemd/xenconsoled.service
-hotplug/Linux/systemd/xen-qemu-dom0-disk-backend.service
-hotplug/Linux/systemd/xendomains.service
-hotplug/Linux/systemd/xen-watchdog.service
-])
+AC_CONFIG_FILES([../config/Tools.mk])
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_AUX_DIR([../])
 
@@ -32,12 +19,6 @@ APPEND_INCLUDES and APPEND_LIB instead when possible.])
 ])
 
 AC_CANONICAL_HOST
-
-case $host_vendor in
-rumpxen) CONFIG_RUMP=y; rump=true ;;
-*)       CONFIG_RUMP=n; rump=false ;;
-esac
-AC_SUBST(CONFIG_RUMP)
 
 AC_SYS_LARGEFILE
 
@@ -53,11 +34,11 @@ AC_SUBST(FILE_OFFSET_BITS)
 m4_include([../m4/savevar.m4])
 m4_include([../m4/features.m4])
 m4_include([../m4/path_or_fail.m4])
-m4_include([../m4/checkpolicy.m4])
-m4_include([../m4/set_cflags_ldflags.m4])
 m4_include([../m4/python_version.m4])
 m4_include([../m4/python_devel.m4])
 m4_include([../m4/ocaml.m4])
+m4_include([../m4/checkpolicy.m4])
+m4_include([../m4/set_cflags_ldflags.m4])
 m4_include([../m4/uuid.m4])
 m4_include([../m4/pkg.m4])
 m4_include([../m4/curses.m4])
@@ -65,54 +46,28 @@ m4_include([../m4/pthread.m4])
 m4_include([../m4/ptyfuncs.m4])
 m4_include([../m4/extfs.m4])
 m4_include([../m4/fetcher.m4])
-m4_include([../m4/ax_compare_version.m4])
-m4_include([../m4/paths.m4])
-m4_include([../m4/xenstored.m4])
-m4_include([../m4/systemd.m4])
-
-AX_XEN_EXPAND_CONFIG()
 
 # Enable/disable options
 AX_ARG_DEFAULT_DISABLE([githttp], [Download GIT repositories via HTTP])
 AX_ARG_DEFAULT_ENABLE([monitors], [Disable xenstat and xentop monitoring tools])
+AX_ARG_DEFAULT_DISABLE([xenapi], [Enable Xen API Bindings])
 AX_ARG_DEFAULT_ENABLE([ocamltools], [Disable Ocaml tools])
 AX_ARG_DEFAULT_ENABLE([xsmpolicy], [Disable XSM policy compilation])
 AX_ARG_DEFAULT_DISABLE([ovmf], [Enable OVMF])
+AX_ARG_DEFAULT_ENABLE([rombios], [Disable ROM BIOS])
 AX_ARG_DEFAULT_ENABLE([seabios], [Disable SeaBIOS])
 AX_ARG_DEFAULT_ENABLE([debug], [Disable debug build of tools])
+AX_ARG_DEFAULT_DISABLE([xend], [Enable xend toolstack])
 AX_ARG_DEFAULT_DISABLE([blktap1], [Enable blktap1 tools])
-
-dnl Enable blktap2 on Linux only.
-AC_ARG_ENABLE([blktap2],
-    AS_HELP_STRING([--enable-blktap2],
-                   [Enable blktap2, (DEFAULT is on for Linux, otherwise off)]),,[
-    case "$host_os" in
-        linux*)
-           enable_blktap2="yes";;
-        *) enable_blktap2="no";;
-    esac
-])
-AS_IF([test "x$enable_blktap2" = "xyes"], [
-AC_DEFINE([HAVE_BLKTAP2], [1], [Blktap2 enabled])
-    blktap2=y],[
-    blktap2=n
-])
-AC_SUBST(blktap2)
-
 
 AC_ARG_ENABLE([qemu-traditional],
     AS_HELP_STRING([--enable-qemu-traditional],
-                   [Enable qemu traditional device model, (DEFAULT is on for Linux or NetBSD x86, otherwise off)]),,[
+                   [Enable qemu traditional device model, (DEFAULT is on for x86, otherwise off)]),,[
     case "$host_cpu" in
         i[[3456]]86|x86_64)
            enable_qemu_traditional="yes";;
         *) enable_qemu_traditional="no";;
     esac
-    case "$host_os" in
-        freebsd*)
-           enable_qemu_traditional="no";;
-    esac
-
 ])
 AS_IF([test "x$enable_qemu_traditional" = "xyes"], [
 AC_DEFINE([HAVE_QEMU_TRADITIONAL], [1], [Qemu traditional enabled])
@@ -120,22 +75,6 @@ AC_DEFINE([HAVE_QEMU_TRADITIONAL], [1], [Qemu traditional enabled])
     qemu_traditional=n
 ])
 AC_SUBST(qemu_traditional)
-
-AC_ARG_ENABLE([rombios],
-    AS_HELP_STRING([--enable-rombios],
-                   [Enable ROMBIOS, (DEFAULT is on if qemu-traditional is enabled, otherwise off)]),,[
-    AS_IF([test "x$enable_qemu_traditional" = "xyes"], [
-        enable_rombios="yes"
-    ], [
-        enable_rombios="no"
-    ])
-])
-AS_IF([test "x$enable_rombios" = "xyes"], [
-AC_DEFINE([HAVE_ROMBIOS], [1], [ROMBIOS enabled])
-    rombios=y],[
-    rombios=n
-])
-AC_SUBST(rombios)
 
 AC_ARG_WITH([system-qemu],
     AS_HELP_STRING([--with-system-qemu@<:@=PATH@:>@],
@@ -180,16 +119,6 @@ AC_ARG_WITH([system-ovmf],
 ],[])
 AC_SUBST(ovmf_path)
 
-AC_ARG_WITH([extra-qemuu-configure-args],
-    AS_HELP_STRING([--with-extra-qemuu-configure-args@<:@="--ARG1 ..."@:>@],
-       [List of additional configure options for upstream qemu]),[
-    case $withval in
-        no) EXTRA_QEMUU_CONFIGURE_ARGS= ;;
-        *)  EXTRA_QEMUU_CONFIGURE_ARGS=$withval ;;
-    esac
-],[])
-AC_SUBST(EXTRA_QEMUU_CONFIGURE_ARGS)
-
 AC_ARG_VAR([PREPEND_INCLUDES],
     [List of include folders to prepend to CFLAGS (without -I)])
 AC_ARG_VAR([PREPEND_LIB],
@@ -221,24 +150,17 @@ AC_PROG_INSTALL
 AC_PATH_PROG([BISON], [bison])
 AC_PATH_PROG([FLEX], [flex])
 AX_PATH_PROG_OR_FAIL([PERL], [perl])
-
-AC_PROG_OCAML
-AC_PROG_FINDLIB
-
-AX_XENSTORE_OPTIONS
-AX_XENSTORE_SET
-
+AS_IF([test "x$xapi" = "xy"], [
+    AX_PATH_PROG_OR_FAIL([CURL], [curl-config])
+    AX_PATH_PROG_OR_FAIL([XML], [xml2-config])
+])
 AS_IF([test "x$ocamltools" = "xy"], [
+    AC_PROG_OCAML
+    AC_PROG_FINDLIB
     AS_IF([test "x$OCAMLC" = "xno" || test "x$OCAMLFIND" = "xno"], [
         AS_IF([test "x$enable_ocamltools" = "xyes"], [
             AC_MSG_ERROR([Ocaml tools enabled, but unable to find Ocaml])])
         ocamltools="n"
-    ], [
-        AX_COMPARE_VERSION([$OCAMLVERSION], [lt], [3.09.3], [
-            AS_IF([test "x$enable_ocamltools" = "xyes"], [
-                AC_MSG_ERROR([Your version of OCaml: $OCAMLVERSION is not supported])])
-            ocamltools="n"
-        ])
     ])
 ])
 AS_IF([test "x$xsmpolicy" = "xy"], [
@@ -261,8 +183,6 @@ AX_CHECK_PYTHON_VERSION([2], [3])
 AS_IF([test "$cross_compiling" != yes], [
     AX_CHECK_PYTHON_DEVEL()
 ])
-
-if ! $rump; then
 
 AX_PATH_PROG_OR_FAIL([XGETTEXT], [xgettext])
 dnl as86, ld86, bcc and iasl are only required when the host system is x86*.
@@ -293,9 +213,7 @@ AC_CHECK_HEADER([lzo/lzo1x.h], [
 AC_CHECK_LIB([lzo2], [lzo1x_decompress], [zlib="$zlib -DHAVE_LZO1X -llzo2"])
 ])
 AC_SUBST(zlib)
-AS_IF([test "x$enable_blktap1" = "xyes" || test "x$enable_blktap2" = "xyes"], [
 AC_CHECK_LIB([aio], [io_setup], [], [AC_MSG_ERROR([Could not find libaio])])
-])
 AC_SUBST(system_aio)
 AC_CHECK_LIB([crypto], [MD5], [], [AC_MSG_ERROR([Could not find libcrypto])])
 AX_CHECK_EXTFS
@@ -316,10 +234,19 @@ AC_CHECK_LIB([fdt], [fdt_create], [], [AC_MSG_ERROR([Could not find libfdt])])
 esac
 
 # Checks for header files.
-AC_CHECK_HEADERS([yajl/yajl_version.h sys/eventfd.h valgrind/memcheck.h utmp.h])
+AC_CHECK_HEADERS([yajl/yajl_version.h sys/eventfd.h])
 
-fi # ! $rump
-
-AX_AVAILABLE_SYSTEMD()
 AC_OUTPUT()
 
+AS_IF([test "x$xend" = "xy" ], [
+    AC_MSG_WARN(
+[You have enabled the xend toolstack.
+
+xend is deprecated and scheduled for removal. Please migrate to another
+toolstack ASAP.
+
+See http://wiki.xen.org/wiki/Choice_of_Toolstacks for information on
+other alternatives, including xl which is designed to be a drop in
+replacement for xm (http://wiki.xen.org/wiki/XL).
+])
+])

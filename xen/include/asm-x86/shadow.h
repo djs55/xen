@@ -44,6 +44,10 @@
 #define shadow_mode_external(_d)  (paging_mode_shadow(_d) && \
                                    paging_mode_external(_d))
 
+/* Xen traps & emulates all reads of all page table pages:
+ * not yet supported */
+#define shadow_mode_trap_reads(_d) ({ (void)(_d); 0; })
+
 /*****************************************************************************
  * Entry points into the shadow code */
 

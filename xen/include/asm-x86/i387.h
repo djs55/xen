@@ -28,17 +28,16 @@ struct ix87_state {
         uint32_t fdp;
         uint16_t fds, _res6;
     } env;
-    struct __packed ix87_reg {
+    struct ix87_reg {
         uint64_t mantissa;
         uint16_t exponent:15;
         uint16_t sign:1;
-    } r[8];
+    } __attribute__((__packed__)) r[8];
 };
 
 void vcpu_restore_fpu_eager(struct vcpu *v);
 void vcpu_restore_fpu_lazy(struct vcpu *v);
 void vcpu_save_fpu(struct vcpu *v);
-void save_fpu_enable(void);
 
 int vcpu_init_fpu(struct vcpu *v);
 void vcpu_destroy_fpu(struct vcpu *v);

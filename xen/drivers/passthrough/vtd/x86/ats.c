@@ -110,23 +110,17 @@ int dev_invalidate_iotlb(struct iommu *iommu, u16 did,
     u64 addr, unsigned int size_order, u64 type)
 {
     struct pci_ats_dev *pdev;
-    int ret = 0;
+    int sbit, ret = 0;
+    u16 sid;
 
     if ( !ecap_dev_iotlb(iommu->ecap) )
         return ret;
 
     list_for_each_entry( pdev, &ats_devices, list )
     {
-        u16 sid = PCI_BDF2(pdev->bus, pdev->devfn);
-        bool_t sbit;
-        int rc = 0;
+        sid = (pdev->bus << 8) | pdev->devfn;
 
-        /* Only invalidate devices that belong to this IOMMU */
-        if ( pdev->iommu != iommu )
-            continue;
-
-        switch ( type )
-        {
+        switch ( type ) {
         case DMA_TLB_DSI_FLUSH:
             if ( !device_in_domain(iommu, pdev, did) )
                 break;
@@ -135,37 +129,32 @@ int dev_invalidate_iotlb(struct iommu *iommu, u16 did,
             /* invalidate all translations: sbit=1,bit_63=0,bit[62:12]=1 */
             sbit = 1;
             addr = (~0 << PAGE_SHIFT_4K) & 0x7FFFFFFFFFFFFFFF;
-            rc = qinval_device_iotlb(iommu, pdev->ats_queue_depth,
-                                     sid, sbit, addr);
+            ret |= qinval_device_iotlb(iommu, pdev->ats_queue_depth,
+                                       sid, sbit, addr);
             break;
         case DMA_TLB_PSI_FLUSH:
             if ( !device_in_domain(iommu, pdev, did) )
                 break;
 
+            addr &= ~0 << (PAGE_SHIFT + size_order);
+
             /* if size <= 4K, set sbit = 0, else set sbit = 1 */
             sbit = size_order ? 1 : 0;
 
             /* clear lower bits */
-            addr &= ~0 << PAGE_SHIFT_4K;
+            addr &= (~0 << (PAGE_SHIFT + size_order));
 
             /* if sbit == 1, zero out size_order bit and set lower bits to 1 */
             if ( sbit )
-            {
-                addr &= ~((u64)PAGE_SIZE_4K << (size_order - 1));
-                addr |= (((u64)1 << (size_order - 1)) - 1) << PAGE_SHIFT_4K;
-            }
+                addr &= (~0  & ~(1 << (PAGE_SHIFT + size_order)));
 
-            rc = qinval_device_iotlb(iommu, pdev->ats_queue_depth,
-                                     sid, sbit, addr);
+            ret |= qinval_device_iotlb(iommu, pdev->ats_queue_depth,
+                                       sid, sbit, addr);
             break;
         default:
             dprintk(XENLOG_WARNING VTDPREFIX, "invalid vt-d flush type\n");
-            return -EOPNOTSUPP;
+            break;
         }
-
-        if ( !ret )
-            ret = rc;
     }
-
     return ret;
 }

@@ -30,8 +30,6 @@ SECTIONS
   .text : /* XXX should be AT ( XEN_PHYS_START ) */ {
         _stext = .;            /* Text section */
        *(.text)
-       *(.text.cold)
-       *(.text.unlikely)
        *(.fixup)
        *(.gnu.warning)
        _etext = .;             /* End of text section */
@@ -178,9 +176,3 @@ SECTIONS
   .stab.indexstr 0 : { *(.stab.indexstr) }
   .comment 0 : { *(.comment) }
 }
-
-/*
- * We require that Xen is loaded at a 4K boundary, so this ensures that any
- * code running on the boot time identity map cannot cross a section boundary.
- */
-ASSERT( _end_boot - start <= PAGE_SIZE, "Boot code is larger than 4K")

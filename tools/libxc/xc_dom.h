@@ -68,14 +68,6 @@ struct xc_dom_image {
 
     /* memory layout */
     struct xc_dom_seg kernel_seg;
-    /* If ramdisk_seg.vstart is non zero then the ramdisk will be
-     * loaded at that address, otherwise it will automatically placed.
-     *
-     * If automatic placement is used and the ramdisk is gzip
-     * compressed then it will be decompressed as it is loaded. If the
-     * ramdisk has been explicitly placed then it is loaded as is
-     * otherwise decompressing risks undoing the manual placement.
-     */
     struct xc_dom_seg ramdisk_seg;
     struct xc_dom_seg p2m_seg;
     struct xc_dom_seg pgtables_seg;
@@ -114,21 +106,13 @@ struct xc_dom_image {
 
     /* physical memory
      *
-     * An x86 PV guest has a single contiguous block of physical RAM,
+     * A PV guest has a single contiguous block of physical RAM,
      * consisting of total_pages starting at rambase_pfn.
-     *
-     * An ARM guest has GUEST_RAM_BANKS regions of RAM, with
-     * rambank_size[i] pages in each. The lowest RAM address
-     * (corresponding to the base of the p2m arrays above) is stored
-     * in rambase_pfn.
      */
     xen_pfn_t rambase_pfn;
     xen_pfn_t total_pages;
     struct xc_dom_phys *phys_pages;
     int realmodearea_log;
-#if defined (__arm__) || defined(__aarch64__)
-    xen_pfn_t rambank_size[GUEST_RAM_BANKS];
-#endif
 
     /* malloc memory pool */
     struct xc_dom_mem *memblocks;

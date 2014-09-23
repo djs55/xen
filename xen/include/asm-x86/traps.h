@@ -28,6 +28,8 @@ struct softirq_trap {
 
 struct cpu_user_regs;
 
+extern void machine_check_vector(struct cpu_user_regs *regs, long error_code);
+
 void async_exception_cleanup(struct vcpu *);
  
 /**

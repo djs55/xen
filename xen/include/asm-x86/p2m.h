@@ -29,7 +29,6 @@
 
 #include <xen/config.h>
 #include <xen/paging.h>
-#include <xen/p2m-common.h>
 #include <asm/mem_sharing.h>
 #include <asm/page.h>    /* for pagetable_t */
 
@@ -71,7 +70,6 @@ typedef enum {
     p2m_ram_paging_in = 11,       /* Memory that is being paged in */
     p2m_ram_shared = 12,          /* Shared or sharable memory */
     p2m_ram_broken = 13,          /* Broken page, access cause domain crash */
-    p2m_map_foreign  = 14,        /* ram pages from foreign domain */
 } p2m_type_t;
 
 /*
@@ -141,10 +139,6 @@ typedef unsigned int p2m_query_t;
                       | p2m_to_mask(p2m_grant_map_ro)   \
                       | p2m_to_mask(p2m_ram_shared) )
 
-/* Types that can be subject to bulk transitions. */
-#define P2M_CHANGEABLE_TYPES (p2m_to_mask(p2m_ram_rw) \
-                              | p2m_to_mask(p2m_ram_logdirty) )
-
 #define P2M_POD_TYPES (p2m_to_mask(p2m_populate_on_demand))
 
 /* Pageable types */
@@ -173,7 +167,6 @@ typedef unsigned int p2m_query_t;
 #define p2m_is_hole(_t) (p2m_to_mask(_t) & P2M_HOLE_TYPES)
 #define p2m_is_mmio(_t) (p2m_to_mask(_t) & P2M_MMIO_TYPES)
 #define p2m_is_readonly(_t) (p2m_to_mask(_t) & P2M_RO_TYPES)
-#define p2m_is_changeable(_t) (p2m_to_mask(_t) & P2M_CHANGEABLE_TYPES)
 #define p2m_is_pod(_t) (p2m_to_mask(_t) & P2M_POD_TYPES)
 #define p2m_is_grant(_t) (p2m_to_mask(_t) & P2M_GRANT_TYPES)
 /* Grant types are *not* considered valid, because they can be
@@ -187,11 +180,6 @@ typedef unsigned int p2m_query_t;
 #define p2m_is_sharable(_t) (p2m_to_mask(_t) & P2M_SHARABLE_TYPES)
 #define p2m_is_shared(_t)   (p2m_to_mask(_t) & P2M_SHARED_TYPES)
 #define p2m_is_broken(_t)   (p2m_to_mask(_t) & P2M_BROKEN_TYPES)
-#define p2m_is_foreign(_t)  (p2m_to_mask(_t) & p2m_to_mask(p2m_map_foreign))
-
-#define p2m_is_any_ram(_t)  (p2m_to_mask(_t) &                   \
-                             (P2M_RAM_TYPES | P2M_GRANT_TYPES |  \
-                              p2m_to_mask(p2m_map_foreign)))
 
 /* Per-p2m-table state */
 struct p2m_domain {
@@ -221,11 +209,6 @@ struct p2m_domain {
      * threaded on in LRU order. */
     struct list_head   np2m_list;
 
-    /* Host p2m: Log-dirty ranges registered for the domain. */
-    struct rangeset   *logdirty_ranges;
-
-    /* Host p2m: Global log-dirty mode enabled for the domain. */
-    bool_t             global_logdirty;
 
     /* Host p2m: when this flag is set, don't flush all the nested-p2m 
      * tables on every host-p2m change.  The setter of this flag 
@@ -250,15 +233,11 @@ struct p2m_domain {
     void               (*change_entry_type_global)(struct p2m_domain *p2m,
                                                    p2m_type_t ot,
                                                    p2m_type_t nt);
-    int                (*change_entry_type_range)(struct p2m_domain *p2m,
-                                                  p2m_type_t ot, p2m_type_t nt,
-                                                  unsigned long first_gfn,
-                                                  unsigned long last_gfn);
-    void               (*memory_type_changed)(struct p2m_domain *p2m);
     
     void               (*write_p2m_entry)(struct p2m_domain *p2m,
                                           unsigned long gfn, l1_pgentry_t *p,
-                                          l1_pgentry_t new, unsigned int level);
+                                          mfn_t table_mfn, l1_pgentry_t new,
+                                          unsigned int level);
     long               (*audit_p2m)(struct p2m_domain *p2m);
 
     /* Default P2M access type for each page in the the domain: new pages,
@@ -524,22 +503,13 @@ void p2m_change_type_range(struct domain *d,
                            p2m_type_t ot, p2m_type_t nt);
 
 /* Compare-exchange the type of a single p2m entry */
-int p2m_change_type_one(struct domain *d, unsigned long gfn,
-                        p2m_type_t ot, p2m_type_t nt);
-
-/* Report a change affecting memory types. */
-void p2m_memory_type_changed(struct domain *d);
-
-int p2m_is_logdirty_range(struct p2m_domain *, unsigned long start,
-                          unsigned long end);
+p2m_type_t p2m_change_type(struct domain *d, unsigned long gfn,
+                           p2m_type_t ot, p2m_type_t nt);
 
 /* Set mmio addresses in the p2m table (for pass-through) */
 int set_mmio_p2m_entry(struct domain *d, unsigned long gfn, mfn_t mfn);
-int clear_mmio_p2m_entry(struct domain *d, unsigned long gfn, mfn_t mfn);
+int clear_mmio_p2m_entry(struct domain *d, unsigned long gfn);
 
-/* Add foreign mapping to the guest's p2m table. */
-int p2m_add_foreign(struct domain *tdom, unsigned long fgfn,
-                    unsigned long gpfn, domid_t foreign_domid);
 
 /* 
  * Populate-on-demand
@@ -598,21 +568,21 @@ void p2m_mem_paging_resume(struct domain *d);
  * been promoted with no underlying vcpu pause. If the req_ptr has been populated, 
  * then the caller must put the event in the ring (once having released get_gfn*
  * locks -- caller must also xfree the request. */
-bool_t p2m_mem_access_check(paddr_t gpa, unsigned long gla,
-                            struct npfec npfec,
-                            mem_event_request_t **req_ptr);
+bool_t p2m_mem_access_check(paddr_t gpa, bool_t gla_valid, unsigned long gla, 
+                          bool_t access_r, bool_t access_w, bool_t access_x,
+                          mem_event_request_t **req_ptr);
 /* Resumes the running of the VCPU, restarting the last instruction */
 void p2m_mem_access_resume(struct domain *d);
 
 /* Set access type for a region of pfns.
  * If start_pfn == -1ul, sets the default access type */
-long p2m_set_mem_access(struct domain *d, unsigned long start_pfn, uint32_t nr,
-                        uint32_t start, uint32_t mask, xenmem_access_t access);
+int p2m_set_mem_access(struct domain *d, unsigned long start_pfn, 
+                       uint32_t nr, hvmmem_access_t access);
 
 /* Get access type for a pfn
  * If pfn == -1ul, gets the default access type */
-int p2m_get_mem_access(struct domain *d, unsigned long pfn,
-                       xenmem_access_t *access);
+int p2m_get_mem_access(struct domain *d, unsigned long pfn, 
+                       hvmmem_access_t *access);
 
 /* 
  * Internal functions, only called by other p2m code
@@ -623,7 +593,7 @@ void p2m_free_ptp(struct p2m_domain *p2m, struct page_info *pg);
 
 /* Directly set a p2m entry: only for use by p2m code. Does not need
  * a call to put_gfn afterwards/ */
-int p2m_set_entry(struct p2m_domain *p2m, unsigned long gfn, mfn_t mfn,
+int set_p2m_entry(struct p2m_domain *p2m, unsigned long gfn, mfn_t mfn, 
                   unsigned int page_order, p2m_type_t p2mt, p2m_access_t p2ma);
 
 /* Set up function pointers for PT implementation: only for use by p2m code */
@@ -678,8 +648,6 @@ static inline p2m_type_t p2m_flags_to_type(unsigned long flags)
     return (flags >> 12) & 0x7f;
 }
 
-int p2m_pt_handle_deferred_changes(uint64_t gpa);
-
 /*
  * Nested p2m: shadow p2m tables used for nested HVM virtualization 
  */
@@ -690,38 +658,7 @@ void p2m_flush(struct vcpu *v, struct p2m_domain *p2m);
 void p2m_flush_nestedp2m(struct domain *d);
 
 void nestedp2m_write_p2m_entry(struct p2m_domain *p2m, unsigned long gfn,
-    l1_pgentry_t *p, l1_pgentry_t new, unsigned int level);
-
-/*
- * p2m type to IOMMU flags
- */
-static inline unsigned int p2m_get_iommu_flags(p2m_type_t p2mt)
-{
-    unsigned int flags;
-
-    switch( p2mt )
-    {
-    case p2m_ram_rw:
-    case p2m_grant_map_rw:
-    case p2m_ram_logdirty:
-    case p2m_map_foreign:
-        flags =  IOMMUF_readable | IOMMUF_writable;
-        break;
-    case p2m_ram_ro:
-    case p2m_grant_map_ro:
-        flags = IOMMUF_readable;
-        break;
-    default:
-        flags = 0;
-        break;
-    }
-
-    return flags;
-}
-
-extern int arch_grant_map_page_identity(struct domain *d, unsigned long frame,
-                                 bool_t writeable);
-extern int arch_grant_unmap_page_identity(struct domain *d, unsigned long frame);
+    l1_pgentry_t *p, mfn_t table_mfn, l1_pgentry_t new, unsigned int level);
 
 #endif /* _XEN_P2M_H */
 

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <inttypes.h>
+#include <endian.h>
 #include <stdint.h>
 
 #include "xg_private.h"

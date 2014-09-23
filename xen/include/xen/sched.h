@@ -43,14 +43,8 @@ DEFINE_XEN_GUEST_HANDLE(vcpu_runstate_info_compat_t);
 
 #define SCHED_STAT_CRANK(_X)                (perfc_incr(_X))
 
-/* A global pointer to the hardware domain (usually DOM0). */
-extern struct domain *hardware_domain;
-
-#ifdef CONFIG_LATE_HWDOM
-extern domid_t hardware_domid;
-#else
-#define hardware_domid 0
-#endif
+/* A global pointer to the initial domain (DOM0). */
+extern struct domain *dom0;
 
 #ifndef CONFIG_COMPAT
 #define BITS_PER_EVTCHN_WORD(d) BITS_PER_XEN_ULONG
@@ -74,9 +68,6 @@ extern domid_t hardware_domid;
 #define EVTCHNS_PER_GROUP  (BUCKETS_PER_GROUP * EVTCHNS_PER_BUCKET)
 #define NR_EVTCHN_GROUPS   DIV_ROUND_UP(MAX_NR_EVTCHNS, EVTCHNS_PER_GROUP)
 
-#define XEN_CONSUMER_BITS 3
-#define NR_XEN_CONSUMERS ((1 << XEN_CONSUMER_BITS) - 1)
-
 struct evtchn
 {
 #define ECS_FREE         0 /* Channel is available for use.                  */
@@ -87,8 +78,7 @@ struct evtchn
 #define ECS_VIRQ         5 /* Channel is bound to a virtual IRQ line.        */
 #define ECS_IPI          6 /* Channel is bound to a virtual IPI line.        */
     u8  state;             /* ECS_* */
-    u8  xen_consumer:XEN_CONSUMER_BITS; /* Consumer in Xen if nonzero */
-    u8  pending:1;
+    u8  xen_consumer;      /* Consumer in Xen, if any? (0 = send to guest) */
     u16 notify_vcpu_id;    /* VCPU for local delivery notification */
     u32 port;
     union {
@@ -96,37 +86,22 @@ struct evtchn
             domid_t remote_domid;
         } unbound;     /* state == ECS_UNBOUND */
         struct {
-            evtchn_port_t  remote_port;
+            u16            remote_port;
             struct domain *remote_dom;
         } interdomain; /* state == ECS_INTERDOMAIN */
         struct {
-            u32            irq;
-            evtchn_port_t  next_port;
-            evtchn_port_t  prev_port;
+            u16            irq;
+            u16            next_port;
+            u16            prev_port;
         } pirq;        /* state == ECS_PIRQ */
         u16 virq;      /* state == ECS_VIRQ */
     } u;
     u8 priority;
-    u8 last_priority;
+    u8 pending:1;
     u16 last_vcpu_id;
-#ifdef XSM_ENABLE
-    union {
-#ifdef XSM_NEED_GENERIC_EVTCHN_SSID
-        /*
-         * If an XSM module needs more space for its event channel context,
-         * this pointer stores the necessary data for the security server.
-         */
-        void *generic;
-#endif
+    u8 last_priority;
 #ifdef FLASK_ENABLE
-        /*
-         * Inlining the contents of the structure for FLASK avoids unneeded
-         * allocations, and on 64-bit platforms with only FLASK enabled,
-         * reduces the size of struct evtchn.
-         */
-        u32 flask_sid;
-#endif
-    } ssid;
+    void *ssid;
 #endif
 };
 
@@ -214,24 +189,16 @@ struct vcpu
     unsigned long    pause_flags;
     atomic_t         pause_count;
 
-    /* VCPU paused for mem_event replies. */
-    atomic_t         mem_event_pause_count;
-    /* VCPU paused by system controller. */
-    int              controller_pause_count;
-
     /* IRQ-safe virq_lock protects against delivering VIRQ to stale evtchn. */
-    evtchn_port_t    virq_to_evtchn[NR_VIRQS];
+    u16              virq_to_evtchn[NR_VIRQS];
     spinlock_t       virq_lock;
 
     /* Bitmask of CPUs on which this VCPU may run. */
-    cpumask_var_t    cpu_hard_affinity;
+    cpumask_var_t    cpu_affinity;
     /* Used to change affinity temporarily. */
-    cpumask_var_t    cpu_hard_affinity_tmp;
+    cpumask_var_t    cpu_affinity_tmp;
     /* Used to restore affinity across S3. */
-    cpumask_var_t    cpu_hard_affinity_saved;
-
-    /* Bitmask of CPUs on which this VCPU prefers to run. */
-    cpumask_var_t    cpu_soft_affinity;
+    cpumask_var_t    cpu_affinity_saved;
 
     /* Bitmask of CPUs which are holding onto this VCPU's state. */
     cpumask_var_t    vcpu_dirty_cpumask;
@@ -371,7 +338,7 @@ struct domain
     /* Is this guest dying (i.e., a zombie)? */
     enum { DOMDYING_alive, DOMDYING_dying, DOMDYING_dead } is_dying;
     /* Domain is paused by controller software? */
-    int              controller_pause_count;
+    bool_t           is_paused_by_controller;
     /* Domain's VCPUs are pinned 1:1 to physical CPUs? */
     bool_t           is_pinned;
 
@@ -452,10 +419,6 @@ struct domain
     nodemask_t node_affinity;
     unsigned int last_alloc_node;
     spinlock_t node_affinity_lock;
-
-    /* vNUMA topology accesses are protected by rwlock. */
-    rwlock_t vnuma_rwlock;
-    struct vnuma_info *vnuma;
 };
 
 struct domain_setup_info
@@ -505,7 +468,7 @@ static always_inline int get_domain(struct domain *d)
         old = seen;
         if ( unlikely(_atomic_read(old) & DOMAIN_DESTROYED) )
             return 0;
-        _atomic_set(&new, _atomic_read(old) + 1);
+        _atomic_set(new, _atomic_read(old) + 1);
         seen = atomic_compareandswap(old, new, &d->refcnt);
     }
     while ( unlikely(_atomic_read(seen) != _atomic_read(old)) );
@@ -617,7 +580,7 @@ void __domain_crash(struct domain *d);
  * Mark current domain as crashed and synchronously deschedule from the local
  * processor. This function never returns.
  */
-void noreturn __domain_crash_synchronous(void);
+void __domain_crash_synchronous(void) __attribute__((noreturn));
 #define domain_crash_synchronous() do {                                   \
     printk("domain_crash_sync called from %s:%d\n", __FILE__, __LINE__);  \
     __domain_crash_synchronous();                                         \
@@ -628,7 +591,7 @@ void noreturn __domain_crash_synchronous(void);
  * the crash occured.  If addr is 0, look up address from last extable
  * redirection.
  */
-void noreturn asm_domain_crash_synchronous(unsigned long addr);
+void asm_domain_crash_synchronous(unsigned long addr) __attribute__((noreturn));
 
 #define set_current_state(_s) do { current->state = (_s); } while (0)
 void scheduler_init(void);
@@ -639,11 +602,11 @@ void sched_destroy_domain(struct domain *d);
 int sched_move_domain(struct domain *d, struct cpupool *c);
 long sched_adjust(struct domain *, struct xen_domctl_scheduler_op *);
 long sched_adjust_global(struct xen_sysctl_scheduler_op *);
+void sched_set_node_affinity(struct domain *, nodemask_t *);
 int  sched_id(void);
 void sched_tick_suspend(void);
 void sched_tick_resume(void);
 void vcpu_wake(struct vcpu *v);
-long vcpu_yield(void);
 void vcpu_sleep_nosync(struct vcpu *v);
 void vcpu_sleep_sync(struct vcpu *v);
 
@@ -775,24 +738,12 @@ void vcpu_block(void);
 void vcpu_unblock(struct vcpu *v);
 void vcpu_pause(struct vcpu *v);
 void vcpu_pause_nosync(struct vcpu *v);
-void vcpu_unpause(struct vcpu *v);
-int vcpu_pause_by_systemcontroller(struct vcpu *v);
-int vcpu_unpause_by_systemcontroller(struct vcpu *v);
-
 void domain_pause(struct domain *d);
 void domain_pause_nosync(struct domain *d);
+void vcpu_unpause(struct vcpu *v);
 void domain_unpause(struct domain *d);
-int domain_unpause_by_systemcontroller(struct domain *d);
-int __domain_pause_by_systemcontroller(struct domain *d,
-                                       void (*pause_fn)(struct domain *d));
-static inline int domain_pause_by_systemcontroller(struct domain *d)
-{
-    return __domain_pause_by_systemcontroller(d, domain_pause);
-}
-static inline int domain_pause_by_systemcontroller_nosync(struct domain *d)
-{
-    return __domain_pause_by_systemcontroller(d, domain_pause_nosync);
-}
+void domain_pause_by_systemcontroller(struct domain *d);
+void domain_unpause_by_systemcontroller(struct domain *d);
 void cpu_init(void);
 
 struct scheduler;
@@ -803,8 +754,7 @@ void scheduler_free(struct scheduler *sched);
 int schedule_cpu_switch(unsigned int cpu, struct cpupool *c);
 void vcpu_force_reschedule(struct vcpu *v);
 int cpu_disable_scheduler(unsigned int cpu);
-int vcpu_set_hard_affinity(struct vcpu *v, const cpumask_t *affinity);
-int vcpu_set_soft_affinity(struct vcpu *v, const cpumask_t *affinity);
+int vcpu_set_affinity(struct vcpu *v, const cpumask_t *affinity);
 void restore_vcpu_affinity(struct domain *d);
 
 void vcpu_runstate_get(struct vcpu *v, struct vcpu_runstate_info *runstate);
@@ -825,10 +775,10 @@ void watchdog_domain_destroy(struct domain *d);
 /* 
  * Use this check when the following are both true:
  *  - Using this feature or interface requires full access to the hardware
- *    (that is, this would not be suitable for a driver domain)
- *  - There is never a reason to deny the hardware domain access to this
+ *    (that is, this is would not be suitable for a driver domain)
+ *  - There is never a reason to deny dom0 access to this
  */
-#define is_hardware_domain(_d) ((_d) == hardware_domain)
+#define is_hardware_domain(_d) ((_d)->is_privileged)
 
 /* This check is for functionality specific to a control domain */
 #define is_control_domain(_d) ((_d)->is_privileged)
@@ -844,17 +794,12 @@ void watchdog_domain_destroy(struct domain *d);
 #define has_hvm_container_domain(d) ((d)->guest_type != guest_type_pv)
 #define has_hvm_container_vcpu(v)   (has_hvm_container_domain((v)->domain))
 #define is_pinned_vcpu(v) ((v)->domain->is_pinned || \
-                           cpumask_weight((v)->cpu_hard_affinity) == 1)
+                           cpumask_weight((v)->cpu_affinity) == 1)
 #ifdef HAS_PASSTHROUGH
 #define need_iommu(d)    ((d)->need_iommu)
 #else
 #define need_iommu(d)    (0)
 #endif
-
-static inline bool_t is_vcpu_online(const struct vcpu *v)
-{
-    return !test_bit(_VPF_down, &v->pause_flags);
-}
 
 void set_vcpu_migration_delay(unsigned int delay);
 unsigned int get_vcpu_migration_delay(void);

@@ -29,6 +29,10 @@
 #include <xsm/xsm.h>
 #include <xen/trace.h>
 
+#ifndef is_domain_direct_mapped
+# define is_domain_direct_mapped(d) ((void)(d), 0)
+#endif
+
 struct memop_args {
     /* INPUT */
     struct domain *domain;     /* Domain to be affected. */
@@ -59,7 +63,7 @@ static void increase_reservation(struct memop_args *a)
 
     for ( i = a->nr_done; i < a->nr_extents; i++ )
     {
-        if ( i != a->nr_done && hypercall_preempt_check() )
+        if ( hypercall_preempt_check() )
         {
             a->preempted = 1;
             goto out;
@@ -105,7 +109,7 @@ static void populate_physmap(struct memop_args *a)
 
     for ( i = a->nr_done; i < a->nr_extents; i++ )
     {
-        if ( i != a->nr_done && hypercall_preempt_check() )
+        if ( hypercall_preempt_check() )
         {
             a->preempted = 1;
             goto out;
@@ -200,12 +204,6 @@ int guest_remove_page(struct domain *d, unsigned long gmfn)
         p2m_mem_paging_drop_page(d, gmfn, p2mt);
         return 1;
     }
-    if ( p2mt == p2m_mmio_direct )
-    {
-        clear_mmio_p2m_entry(d, gmfn, _mfn(mfn));
-        put_gfn(d, gmfn);
-        return 1;
-    }
 #else
     mfn = gmfn_to_mfn(d, gmfn);
 #endif
@@ -270,7 +268,7 @@ static void decrease_reservation(struct memop_args *a)
 
     for ( i = a->nr_done; i < a->nr_extents; i++ )
     {
-        if ( i != a->nr_done && hypercall_preempt_check() )
+        if ( hypercall_preempt_check() )
         {
             a->preempted = 1;
             goto out;
@@ -400,8 +398,7 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
           i < (exch.in.nr_extents >> in_chunk_order);
           i++ )
     {
-        if ( i != (exch.nr_exchanged >> in_chunk_order) &&
-             hypercall_preempt_check() )
+        if ( hypercall_preempt_check() )
         {
             exch.nr_exchanged = i << in_chunk_order;
             rcu_unlock_domain(d);
@@ -965,139 +962,8 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
 
         break;
 
-    case XENMEM_get_vnumainfo:
-    {
-        struct vnuma_topology_info topology;
-        struct domain *d;
-        unsigned int dom_vnodes, dom_vranges, dom_vcpus;
-        struct vnuma_info tmp;
-
-        /*
-         * Guest passes nr_vnodes, number of regions and nr_vcpus thus
-         * we know how much memory guest has allocated.
-         */
-        if ( copy_from_guest(&topology, arg, 1 ))
-            return -EFAULT;
-
-        if ( topology.pad != 0 )
-            return -EINVAL;
-
-        if ( (d = rcu_lock_domain_by_any_id(topology.domid)) == NULL )
-            return -ESRCH;
-
-        rc = xsm_get_vnumainfo(XSM_TARGET, d);
-        if ( rc )
-        {
-            rcu_unlock_domain(d);
-            return rc;
-        }
-
-        read_lock(&d->vnuma_rwlock);
-
-        if ( d->vnuma == NULL )
-        {
-            read_unlock(&d->vnuma_rwlock);
-            rcu_unlock_domain(d);
-            return -EOPNOTSUPP;
-        }
-
-        dom_vnodes = d->vnuma->nr_vnodes;
-        dom_vranges = d->vnuma->nr_vmemranges;
-        dom_vcpus = d->max_vcpus;
-
-        /*
-         * Copied from guest values may differ from domain vnuma config.
-         * Check here guest parameters make sure we dont overflow.
-         * Additionaly check padding.
-         */
-        if ( topology.nr_vnodes < dom_vnodes      ||
-             topology.nr_vcpus < dom_vcpus        ||
-             topology.nr_vmemranges < dom_vranges )
-        {
-            read_unlock(&d->vnuma_rwlock);
-            rcu_unlock_domain(d);
-
-            topology.nr_vnodes = dom_vnodes;
-            topology.nr_vcpus = dom_vcpus;
-            topology.nr_vmemranges = dom_vranges;
-
-            /* Copy back needed values. */
-            return __copy_to_guest(arg, &topology, 1) ? -EFAULT : -ENOBUFS;
-        }
-
-        read_unlock(&d->vnuma_rwlock);
-
-        tmp.vdistance = xmalloc_array(unsigned int, dom_vnodes * dom_vnodes);
-        tmp.vmemrange = xmalloc_array(vmemrange_t, dom_vranges);
-        tmp.vcpu_to_vnode = xmalloc_array(unsigned int, dom_vcpus);
-
-        if ( tmp.vdistance == NULL ||
-             tmp.vmemrange == NULL ||
-             tmp.vcpu_to_vnode == NULL )
-        {
-            rc = -ENOMEM;
-            goto vnumainfo_out;
-        }
-
-        /*
-         * Check if vnuma info has changed and if the allocated arrays
-         * are not big enough.
-         */
-        read_lock(&d->vnuma_rwlock);
-
-        if ( dom_vnodes < d->vnuma->nr_vnodes ||
-             dom_vranges < d->vnuma->nr_vmemranges ||
-             dom_vcpus < d->max_vcpus )
-        {
-            read_unlock(&d->vnuma_rwlock);
-            rc = -EAGAIN;
-            goto vnumainfo_out;
-        }
-
-        dom_vnodes = d->vnuma->nr_vnodes;
-        dom_vranges = d->vnuma->nr_vmemranges;
-        dom_vcpus = d->max_vcpus;
-
-        memcpy(tmp.vmemrange, d->vnuma->vmemrange,
-               sizeof(*d->vnuma->vmemrange) * dom_vranges);
-        memcpy(tmp.vdistance, d->vnuma->vdistance,
-               sizeof(*d->vnuma->vdistance) * dom_vnodes * dom_vnodes);
-        memcpy(tmp.vcpu_to_vnode, d->vnuma->vcpu_to_vnode,
-               sizeof(*d->vnuma->vcpu_to_vnode) * dom_vcpus);
-
-        read_unlock(&d->vnuma_rwlock);
-
-        rc = -EFAULT;
-
-        if ( copy_to_guest(topology.vmemrange.h, tmp.vmemrange,
-                           dom_vranges) != 0 )
-            goto vnumainfo_out;
-
-        if ( copy_to_guest(topology.vdistance.h, tmp.vdistance,
-                           dom_vnodes * dom_vnodes) != 0 )
-            goto vnumainfo_out;
-
-        if ( copy_to_guest(topology.vcpu_to_vnode.h, tmp.vcpu_to_vnode,
-                           dom_vcpus) != 0 )
-            goto vnumainfo_out;
-
-        topology.nr_vnodes = dom_vnodes;
-        topology.nr_vcpus = dom_vcpus;
-        topology.nr_vmemranges = dom_vranges;
-
-        rc = __copy_to_guest(arg, &topology, 1) ? -EFAULT : 0;
-
- vnumainfo_out:
-        rcu_unlock_domain(d);
-
-        xfree(tmp.vdistance);
-        xfree(tmp.vmemrange);
-        xfree(tmp.vcpu_to_vnode);
-        break;
-    }
-
     default:
-        rc = arch_memory_op(cmd, arg);
+        rc = arch_memory_op(op, arg);
         break;
     }
 

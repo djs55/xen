@@ -27,7 +27,6 @@
 #include <asm/hvm/io.h>
 #include <asm/hvm/support.h>
 #include <asm/current.h>
-#include <xen/trace.h>
 
 #define USEC_PER_SEC    1000000UL
 #define NS_PER_USEC     1000UL
@@ -79,45 +78,29 @@ static void rtc_update_irq(RTCState *s)
     hvm_isa_irq_assert(vrtc_domain(s), RTC_IRQ);
 }
 
-/* Called by the VPT code after it's injected a PF interrupt for us.
- * Fix up the register state to reflect what happened. */
-static void rtc_pf_callback(struct vcpu *v, void *opaque)
+bool_t rtc_periodic_interrupt(void *opaque)
 {
     RTCState *s = opaque;
+    bool_t ret;
 
     spin_lock(&s->lock);
-
-    if ( !rtc_mode_is(s, no_ack)
-         && (s->hw.cmos_data[RTC_REG_C] & RTC_IRQF)
-         && ++(s->pt_dead_ticks) >= 10 )
+    ret = rtc_mode_is(s, no_ack) || !(s->hw.cmos_data[RTC_REG_C] & RTC_IRQF);
+    if ( rtc_mode_is(s, no_ack) || !(s->hw.cmos_data[RTC_REG_C] & RTC_PF) )
+    {
+        s->hw.cmos_data[RTC_REG_C] |= RTC_PF;
+        rtc_update_irq(s);
+    }
+    else if ( ++(s->pt_dead_ticks) >= 10 )
     {
         /* VM is ignoring its RTC; no point in running the timer */
-        TRACE_0D(TRC_HVM_EMUL_RTC_STOP_TIMER);
         destroy_periodic_time(&s->pt);
-        s->period = 0;
+        s->pt_code = 0;
     }
-
-    s->hw.cmos_data[RTC_REG_C] |= RTC_PF|RTC_IRQF;
-
+    if ( !(s->hw.cmos_data[RTC_REG_C] & RTC_IRQF) )
+        ret = 0;
     spin_unlock(&s->lock);
-}
 
-/* Check whether the REG_C.PF bit should have been set by a tick since
- * the last time we looked. This is used to track ticks when REG_B.PIE
- * is clear; when PIE is set, PF ticks are handled by the VPT callbacks.  */
-static void check_for_pf_ticks(RTCState *s)
-{
-    s_time_t now;
-
-    if ( s->period == 0 || (s->hw.cmos_data[RTC_REG_B] & RTC_PIE) )
-        return;
-
-    now = NOW();
-    if ( (now - s->start_time) / s->period
-         != (s->check_ticks_since - s->start_time) / s->period )
-        s->hw.cmos_data[RTC_REG_C] |= RTC_PF;
-
-    s->check_ticks_since = now;
+    return ret;
 }
 
 /* Enable/configure/disable the periodic timer based on the RTC_PIE and
@@ -142,33 +125,24 @@ static void rtc_timer_update(RTCState *s)
     case RTC_REF_CLCK_4MHZ:
         if ( period_code != 0 )
         {
-            period = 1 << (period_code - 1); /* period in 32 Khz cycles */
-            period = DIV_ROUND(period * 1000000000ULL, 32768); /* in ns */
-            if ( period != s->period )
+            if ( period_code != s->pt_code )
             {
-                s_time_t now = NOW();
-
-                s->period = period;
+                s->pt_code = period_code;
+                period = 1 << (period_code - 1); /* period in 32 Khz cycles */
+                period = DIV_ROUND(period * 1000000000ULL, 32768); /* in ns */
                 if ( v->domain->arch.hvm_domain.params[HVM_PARAM_VPT_ALIGN] )
                     delta = 0;
                 else
-                    delta = period - ((now - s->start_time) % period);
-                if ( s->hw.cmos_data[RTC_REG_B] & RTC_PIE )
-                {
-                    TRACE_2D(TRC_HVM_EMUL_RTC_START_TIMER, delta, period);
-                    create_periodic_time(v, &s->pt, delta, period,
-                                         RTC_IRQ, rtc_pf_callback, s);
-                }
-                else
-                    s->check_ticks_since = now;
+                    delta = period - ((NOW() - s->start_time) % period);
+                create_periodic_time(v, &s->pt, delta, period,
+                                     RTC_IRQ, NULL, s);
             }
             break;
         }
         /* fall through */
     default:
-        TRACE_0D(TRC_HVM_EMUL_RTC_STOP_TIMER);
         destroy_periodic_time(&s->pt);
-        s->period = 0;
+        s->pt_code = 0;
         break;
     }
 }
@@ -510,20 +484,14 @@ static int rtc_ioport_write(void *opaque, uint32_t addr, uint32_t data)
             if ( orig & RTC_SET )
                 rtc_set_time(s);
         }
-        check_for_pf_ticks(s);
         s->hw.cmos_data[RTC_REG_B] = data;
         /*
          * If the interrupt is already set when the interrupt becomes
          * enabled, raise an interrupt immediately.
          */
         rtc_update_irq(s);
-        if ( (data ^ orig) & RTC_PIE )
-        {
-            TRACE_0D(TRC_HVM_EMUL_RTC_STOP_TIMER);
-            destroy_periodic_time(&s->pt);
-            s->period = 0;
+        if ( (data & RTC_PIE) && !(orig & RTC_PIE) )
             rtc_timer_update(s);
-        }
         if ( (data ^ orig) & RTC_SET )
             check_update_timer(s);
         if ( (data ^ orig) & (RTC_24H | RTC_DM_BINARY | RTC_SET) )
@@ -677,14 +645,14 @@ static uint32_t rtc_ioport_read(RTCState *s, uint32_t addr)
             ret |= RTC_UIP;
         break;
     case RTC_REG_C:
-        check_for_pf_ticks(s);
         ret = s->hw.cmos_data[s->hw.cmos_index];
         s->hw.cmos_data[RTC_REG_C] = 0x00;
-        if ( ret & RTC_IRQF )
+        if ( (ret & RTC_IRQF) && !rtc_mode_is(s, no_ack) )
             hvm_isa_irq_deassert(d, RTC_IRQ);
+        rtc_update_irq(s);
         check_update_timer(s);
         alarm_timer_update(s);
-        s->pt_dead_ticks = 0;
+        rtc_timer_update(s);
         break;
     default:
         ret = s->hw.cmos_data[s->hw.cmos_index];
@@ -779,9 +747,8 @@ void rtc_reset(struct domain *d)
 {
     RTCState *s = domain_vrtc(d);
 
-    TRACE_0D(TRC_HVM_EMUL_RTC_STOP_TIMER);
     destroy_periodic_time(&s->pt);
-    s->period = 0;
+    s->pt_code = 0;
     s->pt.source = PTSRC_isa;
 }
 
@@ -821,7 +788,6 @@ void rtc_deinit(struct domain *d)
 
     spin_barrier(&s->lock);
 
-    TRACE_0D(TRC_HVM_EMUL_RTC_STOP_TIMER);
     destroy_periodic_time(&s->pt);
     kill_timer(&s->update_timer);
     kill_timer(&s->update_timer2);
@@ -836,12 +802,3 @@ void rtc_update_clock(struct domain *d)
     s->current_tm = gmtime(get_localtime(d));
     spin_unlock(&s->lock);
 }
-
-/*
- * Local variables:
- * mode: C
- * c-file-style: "BSD"
- * c-basic-offset: 4
- * indent-tabs-mode: nil
- * End:
- */

@@ -7,7 +7,7 @@
 all: dist
 
 -include config/Toplevel.mk
-SUBSYSTEMS?=xen tools stubdom docs
+SUBSYSTEMS?=xen kernels tools stubdom docs
 TARGS_DIST=$(patsubst %, dist-%, $(SUBSYSTEMS))
 TARGS_INSTALL=$(patsubst %, install-%, $(SUBSYSTEMS))
 
@@ -15,15 +15,15 @@ export XEN_ROOT=$(CURDIR)
 include Config.mk
 
 SUBARCH := $(subst x86_32,i386,$(XEN_TARGET_ARCH))
-export XEN_TARGET_ARCH SUBARCH
-export DESTDIR
+export XEN_TARGET_ARCH SUBARCH XEN_SYSTYPE
+include buildconfigs/Rules.mk
 
 # build and install everything into the standard system directories
 .PHONY: install
 install: $(TARGS_INSTALL)
 
 .PHONY: build
-build:
+build: kernels
 	$(MAKE) -C xen build
 	$(MAKE) -C tools build
 	$(MAKE) -C stubdom build
@@ -54,11 +54,16 @@ dist-%: install-%
 	@: # do nothing
 
 # Legacy dist targets
-.PHONY: xen tools stubdom docs
+.PHONY: xen tools stubdom kernels docs
 xen: dist-xen
 tools: dist-tools
+kernels: dist-kernels
 stubdom: dist-stubdom
 docs: dist-docs
+
+.PHONY: prep-kernels
+prep-kernels:
+	for i in $(XKERNELS) ; do $(MAKE) $$i-prep || exit 1; done
 
 .PHONY: install-xen
 install-xen:
@@ -90,6 +95,10 @@ endif
 install-tools: $(QEMU_TRAD_DIR_TARGET) $(QEMU_XEN_DIR_TARGET)
 	$(MAKE) -C tools install
 
+.PHONY: install-kernels
+install-kernels:
+	for i in $(XKERNELS) ; do $(MAKE) $$i-install || exit 1; done
+
 .PHONY: install-stubdom
 install-stubdom: $(QEMU_TRAD_DIR_TARGET) install-tools
 	$(MAKE) -C stubdom install
@@ -113,12 +122,27 @@ install-docs:
 dev-docs:
 	$(MAKE) -C docs dev-docs
 
-# build xen and the tools and place them in the install
-# directory. 'make install' should then copy them to the normal system
-# directories
+# Build all the various kernels and modules
+.PHONY: kbuild
+kbuild: kernels
+
+# Delete the kernel build trees entirely
+.PHONY: kdelete
+kdelete:
+	for i in $(XKERNELS) ; do $(MAKE) $$i-delete ; done
+
+# Clean the kernel build trees
+.PHONY: kclean
+kclean:
+	for i in $(XKERNELS) ; do $(MAKE) $$i-clean ; done
+
+# build xen, the tools, and a domain 0 plus unprivileged linux-xen images,
+# and place them in the install directory. 'make install' should then
+# copy them to the normal system directories
 .PHONY: world
 world: 
 	$(MAKE) clean
+	$(MAKE) kdelete
 	$(MAKE) dist
 
 # Package a build in a debball file, that is inside a .deb format
@@ -126,15 +150,9 @@ world:
 # to be a full featured policy compliant .deb package.
 .PHONY: debball
 debball: dist
-	fakeroot sh ./tools/misc/mkdeb $(XEN_ROOT) $$($(MAKE) -C xen xenversion --no-print-directory)
+	fakeroot sh ./tools/misc/mkdeb $(XEN_ROOT) $$($(MAKE) -C xen xenversion | grep -v :)
 
-# Package a build in an rpmball file, that is inside a .rpm format
-# container to allow for easy and clean removal. This is not intended
-# to be a full featured policy compliant .rpm package.
-.PHONY: rpmball
-rpmball: dist
-	bash ./tools/misc/mkrpm $(XEN_ROOT) $$($(MAKE) -C xen xenversion --no-print-directory)
-
+# clean doesn't do a kclean
 .PHONY: clean
 clean::
 	$(MAKE) -C xen clean
@@ -145,7 +163,7 @@ ifeq (x86_64,$(XEN_TARGET_ARCH))
 endif
 	$(MAKE) -C docs clean
 
-# clean, but blow away tarballs
+# clean, but blow away kernel build tree plus tarballs
 .PHONY: distclean
 distclean:
 	rm -f config/Toplevel.mk
@@ -156,7 +174,9 @@ ifeq (x86_64,$(XEN_TARGET_ARCH))
 	XEN_TARGET_ARCH=x86_32 $(MAKE) -C stubdom distclean
 endif
 	$(MAKE) -C docs distclean
-	rm -rf dist
+	rm -rf dist patches/tmp
+	for i in $(ALLKERNELS) ; do $(MAKE) $$i-delete ; done
+	rm -rf patches/*/.makedep
 	rm -rf config.log config.status config.cache autom4te.cache
 
 # Linux name for GNU distclean
@@ -176,15 +196,19 @@ help:
 	@echo '  install          - build and install everything'
 	@echo '  install-xen      - build and install the Xen hypervisor'
 	@echo '  install-tools    - build and install the control tools'
+	@echo '  install-kernels  - build and install guest kernels'
 	@echo '  install-stubdom  - build and install the stubdomain images'
 	@echo '  install-docs     - build and install user documentation'
 	@echo ''
 	@echo 'Building targets:'
 	@echo '  dist             - build and install everything into local dist directory'
-	@echo '  world            - clean everything then make dist'
+	@echo '  world            - clean everything, delete guest kernel build'
+	@echo '                     trees then make dist'
 	@echo '  xen              - build and install Xen hypervisor'
 	@echo '  tools            - build and install tools'
 	@echo '  stubdom          - build and install the stubdomain images'
+	@echo '  kernels          - build and install guest kernels'
+	@echo '  kbuild           - synonym for make kernels'
 	@echo '  docs             - build and install user documentation'
 	@echo '  dev-docs         - build developer-only documentation'
 	@echo ''
@@ -192,8 +216,11 @@ help:
 	@echo '  clean            - clean the Xen, tools and docs (but not guest kernel trees)'
 	@echo '  distclean        - clean plus delete kernel build trees and'
 	@echo '                     local downloaded files'
+	@echo '  kdelete          - delete guest kernel build trees'
+	@echo '  kclean           - clean guest kernel build trees'
 	@echo ''
 	@echo 'Miscellaneous targets:'
+	@echo '  prep-kernels     - prepares kernel directories, does not build'
 	@echo '  uninstall        - attempt to remove installed Xen tools'
 	@echo '                     (use with extreme care!)'
 	@echo
@@ -216,14 +243,15 @@ uninstall:
 	rm -f  $(D)$(CONFIG_DIR)/udev/rules.d/xen-backend.rules
 	rm -f  $(D)$(CONFIG_DIR)/udev/rules.d/xend.rules
 	rm -f  $(D)$(SYSCONFIG_DIR)/xendomains
-	rm -f  $(D)$(SBINDIR)/xendomains
 	rm -f  $(D)$(SYSCONFIG_DIR)/xencommons
-	rm -f  $(D)$(XEN_SYSTEMD_DIR)/*.service
-	rm -f  $(D)$(XEN_SYSTEMD_DIR)/*.mount
-	rm -f  $(D)$(XEN_SYSTEMD_MODULES_LOAD)/*.conf
-	rm -rf $(D)$(XEN_RUN_DIR)* $(D)/var/lib/xen*
+	rm -rf $(D)/var/run/xen* $(D)/var/lib/xen*
 	make -C tools uninstall
 	rm -rf $(D)/boot/tboot*
+
+# Legacy targets for compatibility
+.PHONY: linux26
+linux26:
+	$(MAKE) 'KERNELS=linux-2.6*' kernels
 
 .PHONY: xenversion
 xenversion:

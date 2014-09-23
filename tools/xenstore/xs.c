@@ -282,17 +282,19 @@ struct xs_handle *xs_daemon_open_readonly(void)
 
 struct xs_handle *xs_domain_open(void)
 {
-	return xs_open(0);
+	return xs_open(XS_OPEN_DOMAINONLY);
 }
 
 struct xs_handle *xs_open(unsigned long flags)
 {
 	struct xs_handle *xsh = NULL;
 
+	if (!(flags & XS_OPEN_DOMAINONLY)) {
 	if (flags & XS_OPEN_READONLY)
 		xsh = get_handle(xs_daemon_socket_ro());
 	else
 		xsh = get_handle(xs_daemon_socket());
+	}
 
 	if (!xsh && !(flags & XS_OPEN_SOCKETONLY))
 		xsh = get_handle(xs_domain_dev());
@@ -724,10 +726,7 @@ bool xs_watch(struct xs_handle *h, const char *path, const char *token)
 	struct iovec iov[2];
 
 #ifdef USE_PTHREAD
-#define DEFAULT_THREAD_STACKSIZE (16 * 1024)
-#define READ_THREAD_STACKSIZE 					\
-	((DEFAULT_THREAD_STACKSIZE < PTHREAD_STACK_MIN) ? 	\
-	PTHREAD_STACK_MIN : DEFAULT_THREAD_STACKSIZE)
+#define READ_THREAD_STACKSIZE PTHREAD_STACK_MIN
 
 	/* We dynamically create a reader thread on demand. */
 	mutex_lock(&h->request_mutex);
