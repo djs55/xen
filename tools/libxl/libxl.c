@@ -2837,7 +2837,7 @@ int libxl__device_nic_setdefault(libxl__gc *gc, libxl_device_nic *nic,
         nic->bridge = strdup("xenbr0");
         if (!nic->bridge) return ERROR_NOMEM;
     }
-    if ( !nic->script && asprintf(&nic->script, "%s/vif-bridge",
+    if (asprintf(&nic->script, "%s/none",
                                   libxl__xen_script_dir_path()) < 0 )
         return ERROR_FAIL;
 
@@ -2885,6 +2885,7 @@ static int libxl__device_from_nic(libxl__gc *gc, uint32_t domid,
     return 0;
 }
 
+extern char hotplug_vif[100];
 void libxl__device_nic_add(libxl__egc *egc, uint32_t domid,
                            libxl_device_nic *nic, libxl__ao_device *aodev)
 {
@@ -2970,6 +2971,7 @@ void libxl__device_nic_add(libxl__egc *egc, uint32_t domid,
 
     aodev->dev = device;
     aodev->action = LIBXL__DEVICE_ACTION_ADD;
+    sprintf(hotplug_vif,"vif%u.%d",domid, nic->devid);
     libxl__wait_device_connection(egc, aodev);
 
     rc = 0;

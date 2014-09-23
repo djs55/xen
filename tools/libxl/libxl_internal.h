@@ -118,6 +118,8 @@
 #endif
   /* all of these macros preserve errno (saving and restoring) */
 
+extern void hotplug_vif_noscript(void);
+
 /* logging */
 _hidden void libxl__logv(libxl_ctx *ctx, xentoollog_level msglevel, int errnoval,
              const char *file /* may be 0 */, int line /* ignored if !file */,
