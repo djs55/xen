@@ -2058,7 +2058,7 @@ static uint32_t create_domain(struct domain_create *dom_info)
 
     int i;
     int need_daemon = daemonize;
-    int ret, rc;
+    int ret, rc = 0;
     libxl_evgen_domain_death *deathw = NULL;
     libxl_evgen_disk_eject **diskws = NULL; /* one per disk */
     void *config_data = 0;
