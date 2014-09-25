@@ -1018,7 +1018,7 @@ static int chflags(char *dev, __u32 flags, __u32 mask)
         if (err)
             perror("SIOCSIFFLAGS");
     }
-    close(fd);
+    /* close(fd); */
     return err;
 
 }
