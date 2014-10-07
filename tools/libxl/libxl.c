@@ -3606,7 +3606,7 @@ int libxl__init_console_from_channel(libxl__gc *gc,
     libxl__device_console_init(console);
     console->devid = dev_num;
     console->consback = LIBXL__CONSOLE_BACKEND_IOEMU;
-    if (!channel->name){
+    if (!channel->name) {
         LOG(ERROR, "channel %d has no name", channel->devid);
         return ERROR_INVAL;
     }
