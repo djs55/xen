@@ -6135,9 +6135,8 @@ int main_channellist(int argc, char **argv)
     for (argv += optind, argc -= optind; argc > 0; --argc, ++argv) {
         uint32_t domid = find_domain(*argv);
         channels = libxl_device_channel_list(ctx, domid, &nb);
-        if (!channels) {
+        if (!channels)
             continue;
-        }
         for (i = 0; i < nb; ++i) {
             if (!libxl_device_channel_getinfo(ctx, domid, &channels[i],
                 &channelinfo)) {
