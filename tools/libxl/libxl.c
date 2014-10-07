@@ -3708,6 +3708,7 @@ static int libxl__append_channel_list_of_type(libxl__gc *gc,
     for (i = 0; i < n; i++) {
         const char *p, *name;
         libxl_device_channel *tmp;
+
         p = libxl__sprintf(gc, "%s/%s", fe_path, dir[i]);
         name = libxl__xs_read(gc, XBT_NULL, GCSPRINTF("%s/name", p));
         /* 'channels' are consoles with names, so ignore all consoles
