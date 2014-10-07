@@ -1425,7 +1425,7 @@ static void parse_config_data(const char *config_source,
                 free(value);
                 free(value_untrimmed);
             }
-            switch (chn->connection){
+            switch (chn->connection) {
             case LIBXL_CHANNEL_CONNECTION_UNKNOWN:
                 fprintf(stderr, "channel has unknown 'connection'\n");
                 exit(1);
