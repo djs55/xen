@@ -1202,8 +1202,10 @@ static void domcreate_launch_dm(libxl__egc *egc, libxl__multidev *multidev,
         libxl__device device;
         ret = libxl__init_console_from_channel(gc, &console, i + 1,
                                                &d_config->channels[i]);
-        if ( ret )
+        if ( ret ) {
+            libxl__device_console_dispose(&console);
             goto error_out;
+        }
         libxl__device_console_add(gc, domid, &console, NULL, &device);
         libxl__device_console_dispose(&console);
     }
