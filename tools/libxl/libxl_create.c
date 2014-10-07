@@ -387,7 +387,7 @@ int libxl__domain_build_info_setdefault(libxl__gc *gc,
     return 0;
 }
 
-static int init_console_info(libxl__gc *gc,
+static void init_console_info(libxl__gc *gc,
                              libxl__device_console *console,
                              int dev_num)
 {
@@ -397,7 +397,6 @@ static int init_console_info(libxl__gc *gc,
     console->output = libxl__strdup(NOGC, "pty");
     /* console->{name,connection,path} are NULL on normal consoles.
        Only 'channels' when mapped to consoles have a string name. */
-    return 0;
 }
 
 int libxl__domain_build(libxl__gc *gc,
@@ -1216,9 +1215,7 @@ static void domcreate_launch_dm(libxl__egc *egc, libxl__multidev *multidev,
         libxl__device device;
         libxl_device_vkb vkb;
 
-        ret = init_console_info(gc, &console, 0);
-        if ( ret )
-            goto error_out;
+        init_console_info(gc, &console, 0);
         console.backend_domid = state->console_domid;
         libxl__device_console_add(gc, domid, &console, state, &device);
         libxl__device_console_dispose(&console);
@@ -1254,9 +1251,7 @@ static void domcreate_launch_dm(libxl__egc *egc, libxl__multidev *multidev,
             libxl__device_vkb_add(gc, domid, &d_config->vkbs[i]);
         }
 
-        ret = init_console_info(gc, &console, 0);
-        if ( ret )
-            goto error_out;
+        init_console_info(gc, &console, 0);
 
         need_qemu = libxl__need_xenpv_qemu(gc, 1, &console,
                 d_config->num_vfbs, d_config->vfbs,
