@@ -601,6 +601,9 @@ retry_transaction:
     libxl__xs_mkdir(gc, t,
                     libxl__sprintf(gc, "%s/data", dom_path),
                     rwperm, ARRAY_SIZE(rwperm));
+    libxl__xs_mkdir(gc, t,
+                    libxl__sprintf(gc, "%s/error", dom_path),
+                    rwperm, ARRAY_SIZE(rwperm));
 
     if (libxl_defbool_val(info->driver_domain)) {
         /*

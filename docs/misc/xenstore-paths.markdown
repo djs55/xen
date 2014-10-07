@@ -217,20 +217,36 @@ for the first PV console.
 A virtual block device frontend. Described by
 [xen/include/public/io/blkif.h][BLKIF]
 
+#### ~/error/device/vbd/$DEVID/error = STRING []
+
+An error message reported by the virtual block device frontend driver.
+
 #### ~/device/vfb/$DEVID/* []
 
 A virtual framebuffer frontend. Described by
 [xen/include/public/io/fbif.h][FBIF]
+
+#### ~/error/device/vfb/$DEVID/error = STRING []
+
+An error message reported by the virtual framebuffer frontend driver.
 
 #### ~/device/vkbd/$DEVID/* []
 
 A virtual keyboard device frontend. Described by
 [xen/include/public/io/kbdif.h][KBDIF]
 
+#### ~/error/device/vkbd/$DEVID/error = STRING []
+
+An error message reported by the virtual keyboard frontend driver.
+
 #### ~/device/vif/$DEVID/* []
 
 A virtual network device frontend. Described by
 [xen/include/public/io/netif.h][NETIF]
+
+#### ~/error/device/vif/$DEVID/error = STRING []
+
+An error message reported by the virtual network device frontend driver.
 
 #### ~/console/* []
 
@@ -239,6 +255,10 @@ The primary PV console device. Described in [console.txt](console.txt)
 #### ~/device/console/$DEVID/* []
 
 A secondary PV console device. Described in [console.txt](console.txt)
+
+#### ~/error/device/console/$DEVID/error = STRING []
+
+An error message reported by the secondary console device frontend driver.
 
 #### ~/device/serial/$DEVID/* [HVM]
 
