@@ -3604,21 +3604,19 @@ int libxl__init_console_from_channel(libxl__gc *gc,
     int rc;
 
     libxl__device_console_init(console);
-    console->devid = dev_num;
-    console->consback = LIBXL__CONSOLE_BACKEND_IOEMU;
+
+    /* Perform validation first, allocate second. */
+
     if (!channel->name) {
         LOG(ERROR, "channel %d has no name", channel->devid);
         return ERROR_INVAL;
     }
-    console->name = libxl__strdup(NOGC, channel->name);
 
     if (channel->backend_domname) {
         rc = libxl_domain_qualifier_to_domid(CTX, channel->backend_domname,
                                              &channel->backend_domid);
         if (rc < 0) return rc;
     }
-
-    console->backend_domid = channel->backend_domid;
 
     /* The xenstore 'output' node tells the backend what to connect the console
        to. If the channel has "connection = pty" then the "output" node will be
@@ -3638,11 +3636,11 @@ int libxl__init_console_from_channel(libxl__gc *gc,
             console->output = libxl__sprintf(NOGC, "pty");
             break;
         case LIBXL_CHANNEL_CONNECTION_SOCKET:
-            console->connection = libxl__strdup(NOGC, "socket");
             if (!channel->u.socket.path) {
                 LOG(ERROR, "channel %d has no path", channel->devid);
                 return ERROR_INVAL;
             }
+            console->connection = libxl__strdup(NOGC, "socket");
             console->path = libxl__strdup(NOGC, channel->u.socket.path);
             console->output = libxl__sprintf(NOGC, "chardev:libxl-channel%d",
                                              channel->devid);
@@ -3653,6 +3651,11 @@ int libxl__init_console_from_channel(libxl__gc *gc,
                 __func__, channel->connection);
             abort();
     }
+
+    console->devid = dev_num;
+    console->consback = LIBXL__CONSOLE_BACKEND_IOEMU;
+    console->backend_domid = channel->backend_domid;
+    console->name = libxl__strdup(NOGC, channel->name);
 
     return 0;
 }
