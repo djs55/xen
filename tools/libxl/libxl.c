@@ -3602,6 +3602,7 @@ int libxl__init_console_from_channel(libxl__gc *gc,
                                      libxl_device_channel *channel)
 {
     int rc;
+
     libxl__device_console_init(console);
     console->devid = dev_num;
     console->consback = LIBXL__CONSOLE_BACKEND_IOEMU;
