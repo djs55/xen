@@ -47,12 +47,19 @@ the sequence of events would be:
   4. The VM is started
   5. In dom0 the cloud orchestration agent connects to the Unix domain
      socket, writes a handshake message and waits for a reply
-  6. In the guest, a udev rule (part of the guest agent package) is activated
-     by the hotplug event, and it starts the in-guest agent.
-  7. The in-guest agent completes a handshake with the dom0 agent
-  8. The dom0 agent transmits the unique VM configuration: hostname, IP
+  6. In the guest, a udev rule is activated by the console hotplug event.
+     The udev rule would look something like:
+
+     SUBSYSTEM=="xen", DEVPATH=="/devices/console-[0-9]", RUN+="xen-console-setup"
+
+     where the "xen-console-setup" script would read the channel name and
+     make a symlink in /dev/xen-channel/org.my.cloud.software.agent.version1
+  7. The in-guest agent uses inotify to see the creation of the /dev/xen-channel
+     symlink and opens the device.
+  8. The in-guest agent completes the handshake with the dom0 agent
+  9. The dom0 agent transmits the unique VM configuration: hostname, IP
      address, ssh keys etc etc
-  9. The in-guest agent receives the configuration and applies it.
+ 10. The in-guest agent receives the configuration and applies it.
 
 Using channels avoids having to use a temporary disk device or network
 connection.
