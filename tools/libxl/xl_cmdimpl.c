@@ -1436,8 +1436,13 @@ static void parse_config_data(const char *config_source,
                 }
                 chn->u.socket.path = xstrdup(path);
                 break;
-            default:
+            case LIBXL_CHANNEL_CONNECTION_PTY:
+                /* Nothing to do since PTY has no arguments */
                 break;
+            default:
+                fprintf(stderr, "unknown channel connection: %d",
+                        chn->connection);
+                exit(1); 
             }
             libxl_string_list_dispose(&pairs);
             free(path);
