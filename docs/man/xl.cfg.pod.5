@@ -567,13 +567,13 @@ available:
 
 =over 4
 
-=item B<connection=SOCKET>:
+=item B<connection=SOCKET>
 
 The backend will bind a Unix domain socket (at the path given by
 B<path=PATH>), call listen and accept connections. The backend will proxy
 data between the channel and the connected socket.
 
-=item B<connection=PTY>:
+=item B<connection=PTY>
 
 The backend will create a pty and proxy data between the channel and the
 master device. The command B<xl channel-list> can be used to discover the
