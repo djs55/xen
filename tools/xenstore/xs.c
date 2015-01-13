@@ -1153,7 +1153,6 @@ start:
 	msg = malloc(sizeof(*msg));
 	if (msg == NULL)
 		goto error;
-	cleanup_push_heap(msg);
 	if (!read_all(h->fd, &msg->hdr, sizeof(msg->hdr), nonblocking)) { /* Cancellation point */
 		saved_errno = errno;
 		goto error_freemsg;
@@ -1169,7 +1168,6 @@ start:
 	body = msg->body = malloc(msg->hdr.len + 1);
 	if (body == NULL)
 		goto error_freemsg;
-	cleanup_push_heap(body);
 	if (!read_all(h->fd, body, msg->hdr.len, 0)) { /* Cancellation point */
 		saved_errno = errno;
 		goto error_freebody;
@@ -1177,7 +1175,8 @@ start:
 
 	/* If we want to ignore this one, drop it now */
 	if (msg->hdr.req_id == IGNORE_THIS_REQID) {
-		/* FIXME: leak */
+		free(msg);
+		free(body);
 		goto start;
 	}
 
@@ -1217,9 +1216,9 @@ start:
 	ret = 0;
 
 error_freebody:
-	cleanup_pop_heap(ret == -1, body);
+	if (ret == -1) free(body);
 error_freemsg:
-	cleanup_pop_heap(ret == -1, msg);
+	if (ret == -1) free(msg);
 error:
 	errno = saved_errno;
 
