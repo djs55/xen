@@ -3069,7 +3069,6 @@ void libxl__device_nic_add(libxl__egc *egc, uint32_t domid,
          hotplug_vif_noscript();
          xc_domain_unpause(ctx->xch, domid);
          LOG(DEBUG, "domain is unpaused; bailing out"); 
-         exit(0);
        }
     }
 
